@@ -2,7 +2,7 @@
 This is the official implementation for [LERF](https://lerf.io).
 
 
-<div align='center'>
+<div align='center'> 
 <img src="https://www.lerf.io/data/nerf_render.svg" height="230px">
 </div>
 
@@ -11,7 +11,7 @@ LERF follows the integration guidelines described [here](https://docs.nerf.studi
 ### 0. Install Nerfstudio dependencies
 [Follow these instructions](https://docs.nerf.studio/en/latest/quickstart/installation.html) up to and including "tinycudann" to install dependencies and create an environment
 ### 1. Clone this repo
-`git clone https://github.com/kerrj/lerf`
+`git clone https://github.com/jayhsu0627/Event3DGS`
 ### 2. Install this repo as a python package
 Navigate to this folder and run `python -m pip install -e .`
 
@@ -20,14 +20,14 @@ Navigate to this folder and run `python -m pip install -e .`
 ### Checking the install
 Run `ns-train -h`: you should see a list of "subcommands" with lerf, lerf-big, and lerf-lite included among them.
 
-# Using LERF
-Now that LERF is installed you can play with it! 
+# Using ESplat
+Now that ESplat is installed you can play with it! 
 
-- Launch training with `ns-train lerf --data <data_folder>`. This specifies a data folder to use. For more details, see [Nerfstudio documentation](https://docs.nerf.studio/en/latest/quickstart/first_nerf.html). 
+- Launch training with `ns-train esplatfacto --data <data_folder>`. This specifies a data folder to use. For more details, see [Nerfstudio documentation](https://docs.nerf.studio/en/latest/quickstart/first_nerf.html). 
 - Connect to the viewer by forwarding the viewer port (we use VSCode to do this), and click the link to `viewer.nerf.studio` provided in the output of the train script
 - Within the viewer, you can type text into the textbox, then select the `relevancy_0` output type to visualize relevancy maps.
 
-## Relevancy Map Normalization
+<!-- ## Relevancy Map NormalizVation
 By default, the viewer shows **raw** relevancy scaled with the turbo colormap. As values lower than 0.5 correspond to irrelevant regions, **we recommend setting the `range` parameter to (-1.0, 1.0)**. To match the visualization from the paper, check the `Normalize` tick-box, which stretches the values to use the full colormap.
 
 The images below show the rgb, raw, centered, and normalized output views for the query "Lily".
@@ -38,10 +38,10 @@ The images below show the rgb, raw, centered, and normalized output views for th
 <img src="readme_images/lily_raw.jpg" width="150px">
 <img src="readme_images/lily_centered.jpg" width="150px">
 <img src="readme_images/lily_normalized.jpg" width="150px">
-</div>
+</div> -->
 
 
-## Resolution
+<!-- ## Resolution
 The Nerfstudio viewer dynamically changes resolution to achieve a desired training throughput.
 
 **To increase resolution, pause training**. Rendering at high resolution (512 or above) can take a second or two, so we recommend rendering at 256px
@@ -60,7 +60,7 @@ Please open Github issues for any installation/usage problems you run into. We'v
 We've designed the code to modularly accept any image encoder that implements the interface in `BaseImageEncoder` (`image_encoder.py`). An example of different encoder implementations can be seen in `clip_encoder.py` vs `openclip_encoder.py`, which implement OpenAI's CLIP and OpenCLIP respectively.
 ### Code structure
 (TODO expand this section)
-The main file to look at for editing and building off LERF is `lerf.py`, which extends the Nerfacto model from Nerfstudio, adds an additional language field, losses, and visualization. The CLIP and DINO pre-processing are carried out by `pyramid_interpolator.py` and `dino_dataloader.py`.
+The main file to look at for editing and building off LERF is `lerf.py`, which extends the Nerfacto model from Nerfstudio, adds an additional language field, losses, and visualization. The CLIP and DINO pre-processing are carried out by `pyramid_interpolator.py` and `dino_dataloader.py`. -->
 
 ## Bibtex
 If you find this useful, please cite the paper!

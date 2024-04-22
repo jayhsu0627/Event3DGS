@@ -2,15 +2,17 @@
 esplatfacto configuration file.
 """
 
-from nerfstudio.cameras.camera_optimizers import CameraOptimizerConfig
+# from nerfstudio.cameras.camera_optimizers import CameraOptimizerConfig
 from nerfstudio.configs.base_config import ViewerConfig
 from nerfstudio.data.dataparsers.nerfstudio_dataparser import NerfstudioDataParserConfig
 from nerfstudio.engine.optimizers import AdamOptimizerConfig, RAdamOptimizerConfig
 from nerfstudio.engine.schedulers import ExponentialDecaySchedulerConfig
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.plugins.types import MethodSpecification
+from nerfstudio.data.datamanagers.full_images_datamanager import EventImageDatamanagerConfig
+from nerfstudio.pipelines.base_pipeline import VanillaPipelineConfig
 
-from esplatfacto.data.esplatfacto_datamanager import ESplatfactoDataManagerConfig
+# from esplatfacto.data.esplatfacto_datamanager import ESplatfactoDataManagerConfig
 from esplatfacto.esplatfacto import ESplatfactoModelConfig
 from esplatfacto.esplatfacto_pipeline import ESplatfactoPipelineConfig
 
@@ -30,7 +32,7 @@ esplatfacto_method = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=VanillaPipelineConfig(
-            datamanager=FullImageDatamanagerConfig(
+            datamanager=EventImageDatamanagerConfig(
                 dataparser=NerfstudioDataParserConfig(load_3D_points=True),
                 cache_images_type="uint8",
             ),
@@ -83,7 +85,7 @@ esplatfacto_method_big = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=VanillaPipelineConfig(
-            datamanager=FullImageDatamanagerConfig(
+            datamanager=EventImageDatamanagerConfig(
                 dataparser=NerfstudioDataParserConfig(load_3D_points=True),
                 cache_images_type="uint8",
             ),
@@ -140,7 +142,7 @@ esplatfacto_method_lite = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=VanillaPipelineConfig(
-            datamanager=FullImageDatamanagerConfig(
+            datamanager=EventImageDatamanagerConfig(
                 dataparser=NerfstudioDataParserConfig(load_3D_points=True),
                 cache_images_type="uint8",
             ),
