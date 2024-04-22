@@ -15,7 +15,7 @@
 
 # Author: Shengjie Xu
 # Date: 4/22/2024
-# Based on: https://github.com/kerrj/lerf/blob/main/lerf/data/lerf_datamanager.py
+# Based on: https://github.com/nerfstudio-project/nerfstudio/blob/main/nerfstudio/models/splatfacto.py
 
 """
 NeRF implementation that combines many recent advancements.
@@ -84,10 +84,10 @@ def SH2RGB(sh):
 
 
 @dataclass
-class SplatfactoModelConfig(ModelConfig):
+class ESplatfactoModelConfig(ModelConfig):
     """Splatfacto Model Config, nerfstudio's implementation of Gaussian Splatting"""
 
-    _target: Type = field(default_factory=lambda: SplatfactoModel)
+    _target: Type = field(default_factory=lambda: ESplatfactoModel)
     warmup_length: int = 500
     """period of steps where refinement is turned off"""
     refine_every: int = 100
@@ -154,14 +154,14 @@ class SplatfactoModelConfig(ModelConfig):
     """Config of the camera optimizer to use"""
 
 
-class SplatfactoModel(Model):
+class ESplatfactoModel(Model):
     """Nerfstudio's implementation of Gaussian Splatting
 
     Args:
         config: Splatfacto configuration to instantiate model
     """
 
-    config: SplatfactoModelConfig
+    config: ESplatfactoModelConfig
 
     def __init__(
         self,

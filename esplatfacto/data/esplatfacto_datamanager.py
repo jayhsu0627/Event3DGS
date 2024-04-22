@@ -15,7 +15,7 @@
 
 # Author: Shengjie Xu
 # Date: 4/22/2024
-# Based on: https://github.com/kerrj/lerf/blob/main/lerf/data/lerf_datamanager.py
+# Based on: https://github.com/nerfstudio-project/nerfstudio/blob/main/nerfstudio/data/datamanagers/full_images_datamanager.py
 
 """
 Data manager that outputs cameras / images instead of raybundles

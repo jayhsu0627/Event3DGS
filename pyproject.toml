@@ -4,6 +4,7 @@ version = "0.0.1"
 
 dependencies=[
     "numpy",
+    "gsplat",
     "imageio",
     "nerfstudio>=0.3.1"
 ]

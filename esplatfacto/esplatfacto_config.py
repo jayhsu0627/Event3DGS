@@ -73,8 +73,9 @@ esplatfacto_method = MethodSpecification(
         viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
         vis="viewer",
     ),
-    description="Default model for esplatfacto",
+    description="Event Camera 3D Gaussian Splatting model",
 )
+
 esplatfacto_method_big = MethodSpecification(
     config=TrainerConfig(
         method_name="esplatfacto",
@@ -131,7 +132,8 @@ esplatfacto_method_big = MethodSpecification(
     ),
     description="More Gaussians, Higher Quality",
 )
-
+#TODO the current model is the same as esplatfacto, we may compress it.
+# https://github.com/maincold2/Compact-3DGS
 esplatfacto_method_lite = MethodSpecification(
     config=TrainerConfig(
         method_name="esplatfacto-lite",
