@@ -9,12 +9,13 @@ from nerfstudio.engine.optimizers import AdamOptimizerConfig, RAdamOptimizerConf
 from nerfstudio.engine.schedulers import ExponentialDecaySchedulerConfig
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.plugins.types import MethodSpecification
-from nerfstudio.data.datamanagers.full_images_datamanager import EventImageDatamanagerConfig
+# from nerfstudio.data.datamanagers.full_images_datamanager import EventImageDatamanagerConfig
+from esplatfacto.data.esplatfacto_datamanager import EventImageDatamanagerConfig
 from nerfstudio.pipelines.base_pipeline import VanillaPipelineConfig
 
 # from esplatfacto.data.esplatfacto_datamanager import ESplatfactoDataManagerConfig
 from esplatfacto.esplatfacto import ESplatfactoModelConfig
-from esplatfacto.esplatfacto_pipeline import ESplatfactoPipelineConfig
+# from esplatfacto.esplatfacto_pipeline import ESplatfactoPipelineConfig
 
 # """
 # Swap out the network config to use OpenCLIP or CLIP here.
@@ -24,7 +25,7 @@ from esplatfacto.esplatfacto_pipeline import ESplatfactoPipelineConfig
 
 esplatfacto_method = MethodSpecification(
     config=TrainerConfig(
-        method_name="esplatfacto",
+        method_name="splatfacto",
         steps_per_eval_image=100,
         steps_per_eval_batch=0,
         steps_per_save=2000,
@@ -32,11 +33,11 @@ esplatfacto_method = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=VanillaPipelineConfig(
-            datamanager=EventImageDatamanagerConfig(
+            datamanager=FullImageDatamanagerConfig(
                 dataparser=NerfstudioDataParserConfig(load_3D_points=True),
                 cache_images_type="uint8",
             ),
-            model=ESplatfactoModelConfig(),
+            model=SplatfactoModelConfig(),
         ),
         optimizers={
             "means": {
@@ -64,10 +65,8 @@ esplatfacto_method = MethodSpecification(
             },
             "quats": {"optimizer": AdamOptimizerConfig(lr=0.001, eps=1e-15), "scheduler": None},
             "camera_opt": {
-                "optimizer": AdamOptimizerConfig(lr=1e-4, eps=1e-15),
-                "scheduler": ExponentialDecaySchedulerConfig(
-                    lr_final=5e-7, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
-                ),
+                "optimizer": AdamOptimizerConfig(lr=1e-3, eps=1e-15),
+                "scheduler": ExponentialDecaySchedulerConfig(lr_final=5e-5, max_steps=30000),
             },
         },
         viewer=ViewerConfig(num_rays_per_chunk=1 << 15),

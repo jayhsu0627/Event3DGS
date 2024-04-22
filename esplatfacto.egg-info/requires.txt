@@ -1,0 +1,4 @@
+numpy
+gsplat
+imageio
+nerfstudio==1.0.3

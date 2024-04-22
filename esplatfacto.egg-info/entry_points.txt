@@ -1,0 +1,4 @@
+[nerfstudio.method_configs]
+esplatfacto = esplatfacto.esplatfacto_config:esplatfacto_method
+esplatfacto_big = esplatfacto.esplatfacto_config:esplatfacto_method_big
+esplatfacto_lite = esplatfacto.esplatfacto_config:esplatfacto_method_lite

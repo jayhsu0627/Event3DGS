@@ -1,0 +1,7 @@
+Metadata-Version: 2.1
+Name: esplatfacto
+Version: 0.0.1
+Requires-Dist: numpy
+Requires-Dist: gsplat
+Requires-Dist: imageio
+Requires-Dist: nerfstudio==1.0.3

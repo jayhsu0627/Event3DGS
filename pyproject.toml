@@ -6,7 +6,7 @@ dependencies=[
     "numpy",
     "gsplat",
     "imageio",
-    "nerfstudio>=0.3.1"
+    "nerfstudio==1.0.3"
 ]
 
 [tool.setuptools.packages.find]
