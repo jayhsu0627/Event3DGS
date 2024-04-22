@@ -25,7 +25,7 @@ from esplatfacto.esplatfacto import ESplatfactoModelConfig
 
 esplatfacto_method = MethodSpecification(
     config=TrainerConfig(
-        method_name="splatfacto",
+        method_name="esplatfacto",
         steps_per_eval_image=100,
         steps_per_eval_batch=0,
         steps_per_save=2000,
@@ -33,11 +33,11 @@ esplatfacto_method = MethodSpecification(
         max_num_iterations=30000,
         mixed_precision=False,
         pipeline=VanillaPipelineConfig(
-            datamanager=FullImageDatamanagerConfig(
+            datamanager=EventImageDatamanagerConfig(
                 dataparser=NerfstudioDataParserConfig(load_3D_points=True),
                 cache_images_type="uint8",
             ),
-            model=SplatfactoModelConfig(),
+            model=ESplatfactoModelConfig(),
         ),
         optimizers={
             "means": {
