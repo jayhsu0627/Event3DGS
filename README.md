@@ -7,7 +7,7 @@ This is the official implementation for [LERF](https://lerf.io).
 </div>
 
 # Installation
-LERF follows the integration guidelines described [here](https://docs.nerf.studio/en/latest/developer_guides/new_methods.html) for custom methods within Nerfstudio. 
+LERF follows the integration guidelines described [here](https://docs.nerf.studio/en/latest/developer_guides/new_methods.html) for custom methods within Nerfstudio. Update to `nerfstudio==1.0.3`.
 ### 0. Install Nerfstudio dependencies
 [Follow these instructions](https://docs.nerf.studio/en/latest/quickstart/installation.html) up to and including "tinycudann" to install dependencies and create an environment
 ### 1. Clone this repo
@@ -15,7 +15,9 @@ LERF follows the integration guidelines described [here](https://docs.nerf.studi
 ### 2. Install this repo as a python package
 Navigate to this folder and run `python -m pip install -e .`
 
-### 3. Run `ns-install-cli`
+### 3. Reinstall gsplat to avoid this [issue](https://github.com/nerfstudio-project/nerfstudio/issues/2727)
+`pip install git+https://github.com/nerfstudio-project/gsplat.git@v0.1.10`
+<!-- ### 4. Run `ns-install-cli` -->
 
 ### Checking the install
 Run `ns-train -h`: you should see a list of "subcommands" with lerf, lerf-big, and lerf-lite included among them.
@@ -29,8 +31,18 @@ Now that ESplat is installed you can play with it!
 ns-train esplatfacto --data C:\Users\sjxu\3_Event_3DGS\Data\nerfstudio\bww_entrance
 ```
 
-- Connect to the viewer by forwarding the viewer port (we use VSCode to do this), and click the link to `viewer.nerf.studio` provided in the output of the train script
-- Within the viewer, you can type text into the textbox, then select the `relevancy_0` output type to visualize relevancy maps.
+- Connect to the viewer by forwarding the viewer port (we use VSCode to do this), and click the link to `viewer.nerf.studio` provided in the output of the train script. Use the viewer running locally at: `http://localhost:7007`
+
+TODO: edit `class ExportGaussianSplat(Exporter)` in `exporter.py`
+- Output `*.ply`
+`ns-export gaussian-splat --load-config outputs\plane\esplatfacto\2024-04-22_201709\config.yml --output-dir exports/ply`
+```
+  File "C:\Users\sjxu\AppData\Local\miniconda3\envs\event3dgs\lib\site-packages\nerfstudio\scripts\exporter.py", line 614, in entrypoint
+    tyro.cli(Commands).main()
+  File "C:\Users\sjxu\AppData\Local\miniconda3\envs\event3dgs\lib\site-packages\nerfstudio\scripts\exporter.py", line 536, in main
+    assert isinstance(pipeline.model, SplatfactoModel)
+AssertionError
+```
 
 <!-- ## Relevancy Map NormalizVation
 By default, the viewer shows **raw** relevancy scaled with the turbo colormap. As values lower than 0.5 correspond to irrelevant regions, **we recommend setting the `range` parameter to (-1.0, 1.0)**. To match the visualization from the paper, check the `Normalize` tick-box, which stretches the values to use the full colormap.
