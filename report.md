@@ -37,9 +37,9 @@ These positions lie on the circle, which corresponds to the correct camera poses
 ### Density Clipping
 For the real scenes, we know that the object always lies inside the cylinder defined by the turntable plate. Hence, to filter the noise and artefacts in the unobserved areas, we force the density to zero everywhere outside of this cylinder:
 
-$$
+```math
 \sigma(x,y,z) =0 \text{, if } x^2+y^2>r_{max}^2 \text{ or } z>z_{max} \text{ or }  z<z_{min} 
-$$
+```
 
 The cylinder parameters zmin, zmax and rmax are tuned manually to fit the recorded experimental setup. In our case, $z_{min} = −0.35$, $z_{max}=0.15$ and $r_{max}=0.25$.
 
