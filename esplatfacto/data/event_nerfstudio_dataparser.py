@@ -494,3 +494,214 @@ class Nerfstudio(DataParser):
         if self.downscale_factor > 1:
             return data_dir / f"{downsample_folder_prefix}{self.downscale_factor}" / filepath.name
         return data_dir / filepath
+
+
+import os
+import numpy as np
+from matplotlib import pyplot as plt
+
+import cv2
+import imageio
+import bm4d
+import os
+import colour
+from colour_demosaicing import (
+    ROOT_RESOURCES_EXAMPLES,
+    demosaicing_CFA_Bayer_bilinear,
+    demosaicing_CFA_Bayer_Malvar2004,
+    demosaicing_CFA_Bayer_Menon2007,
+    mosaicing_CFA_Bayer)
+
+num_events = 53644
+
+class EventImageDatamanager:
+    """
+    A datamanager that outputs full images and cameras instead of raybundles.
+    This makes the datamanager more lightweight since we don't have to do generate rays.
+    Useful for full-image training e.g. rasterization pipelines.
+    deblur_method = ["bilinear", "Malvar2004", "Menon2007"]
+    The BM4D is the deblur stage, which take quite a long time. Default is off, but it can significantly
+    improve synthetic datasets.
+    """
+    def __init__(self, file_path, width, height, debayer_method=None, sigma=0):
+        self.img_size = (height, width)
+        self.debayer = False
+        self.is_colored = True
+        self.file_path = file_path
+        self.F = np.array([[[1, 0, 0], [0, 1, 0]], [[0, 1, 0], [0, 0, 1]]])
+        self.F_tile = np.tile(self.F, (int(height/2), int(width/2), 1))
+        self.debayer_method = debayer_method
+        self.deblur = False
+
+        if sigma>0:
+            self.deblur = True
+            self.sigma = sigma
+        self.get_EventData()
+
+    def load_EventNPZData(self):
+        """Idx: Store the event line of the timestep for each output frames. range from [0-999]
+           Usage: idx[t_i-1] to idx[t_i] capture events motion image.
+                   0         to idx[t_i] capture RGB image
+        """
+        self.event_data = np.load(self.file_path)
+        self.timestamp, self.x, self.y, self.pol = self.event_data['t'], self.event_data['x'], self.event_data['y'], self.event_data['p']
+        print("Data length:", len(self.timestamp))
+        self.idx = []
+        j=0
+        t = 0
+        frame = 0
+        for j in range(107500):
+            if self.timestamp[j]>0:
+                print("Data shutter:", j)
+                break
+        start_pt = 0
+        for k in range(start_pt,len(self.timestamp)):
+            if self.timestamp[k]>t:
+                # print('Data streams per frame:',k-start_pt,t)
+                start_pt = k
+                t+=1
+                self.idx.append(k-1)
+                continue
+        print("idx: ", self.idx)
+        print("Frame: ", len(self.idx))
+
+    def load_EventTXTData(self):
+        infile = open(self.file_path, 'r')
+        timestamp, x, y, pol = [], [], [], []
+        for line in infile:
+            words = line.split()
+            timestamp.append(float(words[0]))
+            x.append(int(words[1]))
+            y.append(int(words[2]))
+            pol.append(int(words[3]))
+        infile.close()
+        self.timestamp, self.x, self.y, self.pol = timestamp, x, y, pol
+
+    def get_file_type(self):
+        root, ext = os.path.splitext(self.file_path)
+        return ext
+
+    def get_EventData(self):
+        if self.get_file_type() == ".txt":
+            print("Loaded txt")
+            self.load_EventTXTData()
+
+        if self.get_file_type() == ".npz":
+            print("Loaded npz")
+            self.load_EventNPZData()
+
+    def scale_img(self, array):
+        min_val = np.min(array)
+        max_val = np.max(array)
+        sf = 255 / (max_val - min_val)
+        scaled_array = ((array - min_val) * sf).astype(np.uint8)
+        return scaled_array
+
+    def convertCameraImg(self, num_events, start=0):
+        # print("before:", np.max(img), np.min(img))
+        # self.img = np.zeros(self.img_size , dtype=np.float32)
+        # self.img = np.zeros(self.img_size , dtype=np.float32) + np.log(125) / 2.2
+        self.img = np.zeros(self.img_size , dtype=np.float32) + np.log(127) / 2.2
+        self.bayer = np.zeros(self.img_size, np.float32)
+        start = start
+
+        # print(self.img[:5,:5])
+
+        print("Load event img at :", num_events)
+        self.t_ref = self.timestamp[0] # time of the last event in the packet
+        self.tau = 0.03 # decay parameter (in seconds)
+        self.dt = num_events*10
+
+        for i in range(start, num_events):
+            self.img[self.y[i], self.x[i]] += self.pol[i]
+
+        bg_mask = self.img == np.log(127) / 2.2
+
+        self.img = np.tile(self.img[..., None], (1, 1, 3))
+        # img = np.tile(img[..., None], (1, 1, 3)) + np.log(159) / 2.2
+
+        print(self.img[:2,:2])
+        print("1. Before:", np.max(self.img), np.min(self.img), self.img.shape)
+
+        self.bayer = self.scale_img(self.img)
+
+        # Apply mask
+        # self.bayer[bg_mask] = 198
+
+        self.img_gray = self.bayer
+        self.bayer = self.F_tile * self.img_gray
+        print("bayer input", np.max(self.bayer), np.min(self.bayer))
+        self.bayer = np.clip(np.exp(self.bayer * 2.2), 0, 255).astype(np.uint8)
+
+        if self.debayer_method:
+            # mosaic
+            self.CFA = mosaicing_CFA_Bayer(self.img_gray)
+            print('here')
+            # Menon2007
+            if self.debayer_method == "bilinear":
+                self.bayer = demosaicing_CFA_Bayer_bilinear(self.CFA)
+            if self.debayer_method == "Malvar2004":
+                self.bayer = demosaicing_CFA_Bayer_Malvar2004(self.CFA)
+            if self.debayer_method == "Menon2007":
+                self.bayer = demosaicing_CFA_Bayer_Menon2007(self.CFA)
+            self.bayer = self.scale_img(self.bayer)
+            print("debayer_method", np.max(self.bayer), np.min(self.bayer))
+
+        if self.deblur:
+            self.bayer = bm4d.bm4d(self.bayer, self.sigma); # white noise: include noise std
+            self.bayer = self.scale_img(self.bayer)
+
+        # # Set background color for RGB
+        # self.bayer[bg_mask] = 125
+
+        # # Apply mask
+        # self.bayer[bg_mask] = 198
+        # self.bayer = np.clip(np.exp(self.bayer * 2.2), 0, 255).astype(np.uint8)
+        # self.bayer = np.exp(self.bayer * 2.2)
+
+        print(self.bayer[:2,:2])
+        print("2. After:", np.max(self.bayer), np.min(self.bayer), self.bayer.shape)
+
+        return self.img_gray, self.bayer
+
+    def AccuDiffCameraImg(self, t_0, t):
+        """ Eq.3 the observed events {Ei}_{i=1}^N between rendered views (multiplied by Bayer colour filter)
+        taken at two different time instants t0 and t. (t - t_0).
+        """
+        return self.convertCameraImg(t, t_0)
+
+    def EventImgPlot(self, img):
+        fig = plt.figure(figsize=(21,6))
+        plt.subplot(1,4,1)
+        plt.imshow(img[:,:,0], clim=(0, 255))
+        plt.subplot(1,4,2)
+        plt.imshow(img[:,:,1], clim=(0, 255))
+        plt.subplot(1,4,3)
+        plt.imshow(img[:,:,2], clim=(0, 255))
+        plt.subplot(1,4,4)
+        plt.imshow(img, clim=(0, 255))
+        plt.show()
+
+    def EventImgSave(self, img, file_path, file_name):
+        # Save the image to a PNG file
+        imageio.imwrite(file_path + str(file_name) +'.png', img)
+
+# ## Example
+# eventData = EventImageDatamanager(file_path, 346, 260, debayer_method="Menon2007", sigma=0)
+
+# t_0 = eventData.idx[0]
+# t = eventData.idx[500]
+
+# print(t_0, t)
+
+# img_t0_gray, img_t0 = eventData.convertCameraImg(t_0)
+# img_t_gray, img_t = eventData.convertCameraImg(t)
+# img_dt_gray, img_dt = eventData.AccuDiffCameraImg(t_0, t)
+
+# eventData.EventImgPlot(img_t0_gray)
+# eventData.EventImgPlot(img_t_gray)
+# eventData.EventImgPlot(img_dt_gray)
+
+# eventData.EventImgPlot(img_t0)
+# eventData.EventImgPlot(img_t)
+# eventData.EventImgPlot(img_dt)
