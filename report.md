@@ -11,7 +11,7 @@ In the DAVIS 346C event camera which we use in our experiments, F consists of th
 
 ### Time frame
 
-For each scene, we render a one-second-long 360◦ rotation of camera around the object at 1000 fps as RGB images, resulting in 1000 views. The maximum timestamp  is $1000$ and the minimum is $0$. Therefore, each incremental timestamp $\delta t=1$ ms.
+For each scene, we render a one-second-long 360◦ rotation of camera around the object at 1000 fps as RGB images, resulting in 1000 views. The maximum timestamp  is $1000$ and the minimum is $0$. Therefore, each incremental timestamp $\Delta t=1$ ms. $\Delta \theta = 360\degree/1000 = 0.36\degree$
 
 ![](./img/syn_timestamp.png)
 
@@ -81,3 +81,31 @@ ax.set_zlim(z_min, z_max)
 plt.title('Cylinder Visualization')
 plt.show()
 ```
+
+## Loss function
+
+
+## Number of Events
+
+
+## Debayer+Deblur
+
+![](./img/TLStory%20VNG.jpg)
+https://www.apertus.org/what-is-debayering-article-october-2015
+
+https://telescope.live/blog/pixinsight-debayer-demosaicing-process-explained
+
+| Input (16x16, C=198)             | Filter Applied                          | CFA                             | Menon2007             |
+| :------------------------------: | :-------------------------------------: | :-----------------------------: | :-------------------: |
+| ![](./img/debayer_gray_input.png)|![](./img/debayer_gray_mosaic_filter.png)| ![](./img/debayer_gray_CFA.png) | ![](./img/debayer_gray_menon2007.png)|
+
+|               | Debayer               | Debayer+bm4d ($\sigma=6$)   | Debayer+bm4d ($\sigma=10$)     | Menon2007                            |
+|:-------------:| :-------------------: | :-------------------------: | :----------------------------: | :----------------------------------: |
+|Drum (E=53644) | ![](./img/debayer.png)|![](./img/debayer_bm4d_6.png)| ![](./img/debayer_bm4d_10.png) | ![](./img/debayer_gray_menon2007.png)|
+
+
+## Real data more sensitive to timer surface representation
+
+The first 53644 events of synthetic datasets is to simulate a shutter, the following 
+
+![](./img/syn_real.png)
