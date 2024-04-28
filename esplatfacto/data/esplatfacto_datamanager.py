@@ -507,6 +507,7 @@ def _undistort_image(
     return K, image, mask
 
     
+
 import os
 import numpy as np
 from matplotlib import pyplot as plt
@@ -534,13 +535,10 @@ class EventImageDatamanager:
     The BM4D is the deblur stage, which take quite a long time. Default is off, but it can significantly
     improve synthetic datasets.
     """
-    def __init__(self, file_path, t_0, t, width, height, debayer_method=None, sigma=0):
-        self.t_0 = t_0
-        self.t = t
+    def __init__(self, file_path, width, height, debayer_method=None, sigma=0):
         self.img_size = (height, width)
         self.debayer = False
         self.is_colored = True
-        # self.img = np.zeros(self.img_size, dtype=np.int8)
         self.file_path = file_path
         self.F = np.array([[[1, 0, 0], [0, 1, 0]], [[0, 1, 0], [0, 0, 1]]])
         self.F_tile = np.tile(self.F, (int(height/2), int(width/2), 1))
@@ -553,8 +551,31 @@ class EventImageDatamanager:
         self.get_EventData()
 
     def load_EventNPZData(self):
+        """Idx: Store the event line of the timestep for each output frames. range from [0-999]
+           Usage: idx[t_i-1] to idx[t_i] capture events motion image.
+                   0         to idx[t_i] capture RGB image
+        """
         self.event_data = np.load(self.file_path)
         self.timestamp, self.x, self.y, self.pol = self.event_data['t'], self.event_data['x'], self.event_data['y'], self.event_data['p']
+        print("Data length:", len(self.timestamp))
+        self.idx = []
+        j=0
+        t = 0
+        frame = 0
+        for j in range(107500):
+            if self.timestamp[j]>0:
+                print("Data shutter:", j)
+                break
+        start_pt = 0
+        for k in range(start_pt,len(self.timestamp)):
+            if self.timestamp[k]>t:
+                # print('Data streams per frame:',k-start_pt,t)
+                start_pt = k
+                t+=1
+                self.idx.append(k-1)
+                continue
+        print("idx: ", self.idx)
+        print("Frame: ", len(self.idx))
 
     def load_EventTXTData(self):
         infile = open(self.file_path, 'r')
@@ -587,19 +608,6 @@ class EventImageDatamanager:
         sf = 255 / (max_val - min_val)
         scaled_array = ((array - min_val) * sf).astype(np.uint8)
         return scaled_array
-
-    # def scale_img(self, array, val, target=198):
-    #     """ suppose the top left corner is the background, and we force its value back to the mid of
-    #     0-255, so our target is always 198
-    #     """
-    #     min_val = np.min(array)
-    #     max_val = np.max(array)
-
-    #     print("np.min", val, target, min_val, max_val)
-
-    #     sf = target / (val - min_val)
-    #     scaled_array = ((array - min_val) * sf).astype(np.uint8)
-    #     return scaled_array
 
     def convertCameraImg(self, num_events, start=0):
         # print("before:", np.max(img), np.min(img))
@@ -660,7 +668,7 @@ class EventImageDatamanager:
 
         # # Apply mask
         # self.bayer[bg_mask] = 198
-        # self.bayer = np.clip(np.exp(self.bayer * 2.2), 0, 255).astype(np.uint8)  
+        # self.bayer = np.clip(np.exp(self.bayer * 2.2), 0, 255).astype(np.uint8)
         # self.bayer = np.exp(self.bayer * 2.2)
 
         print(self.bayer[:2,:2])
@@ -668,11 +676,11 @@ class EventImageDatamanager:
 
         return self.img_gray, self.bayer
 
-    def AccuDiffCameraImg(self):
+    def AccuDiffCameraImg(self, t_0, t):
         """ Eq.3 the observed events {Ei}_{i=1}^N between rendered views (multiplied by Bayer colour filter)
         taken at two different time instants t0 and t. (t - t_0).
         """
-        return self.convertCameraImg(self.t, self.t_0)
+        return self.convertCameraImg(t, t_0)
 
     def EventImgPlot(self, img):
         fig = plt.figure(figsize=(21,6))
