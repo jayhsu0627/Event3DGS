@@ -697,3 +697,23 @@ class EventImageDatamanager:
     def EventImgSave(self, img, file_path, file_name):
         # Save the image to a PNG file
         imageio.imwrite(file_path + str(file_name) +'.png', img)
+
+# ## Example
+# eventData = EventImageDatamanager(file_path, 346, 260, debayer_method="Menon2007", sigma=0)
+
+# t_0 = eventData.idx[0]
+# t = eventData.idx[500]
+
+# print(t_0, t)
+
+# img_t0_gray, img_t0 = eventData.convertCameraImg(t_0)
+# img_t_gray, img_t = eventData.convertCameraImg(t)
+# img_dt_gray, img_dt = eventData.AccuDiffCameraImg(t_0, t)
+
+# eventData.EventImgPlot(img_t0_gray)
+# eventData.EventImgPlot(img_t_gray)
+# eventData.EventImgPlot(img_dt_gray)
+
+# eventData.EventImgPlot(img_t0)
+# eventData.EventImgPlot(img_t)
+# eventData.EventImgPlot(img_dt)
