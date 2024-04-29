@@ -4,7 +4,9 @@ esplatfacto configuration file.
 
 # from nerfstudio.cameras.camera_optimizers import CameraOptimizerConfig
 from nerfstudio.configs.base_config import ViewerConfig
-from nerfstudio.data.dataparsers.nerfstudio_dataparser import NerfstudioDataParserConfig
+# from nerfstudio.data.dataparsers.nerfstudio_dataparser import NerfstudioDataParserConfig
+from esplatfacto.data.event_nerfstudio_dataparser import EventNerfstudioDataParserConfig
+
 from nerfstudio.engine.optimizers import AdamOptimizerConfig, RAdamOptimizerConfig
 from nerfstudio.engine.schedulers import ExponentialDecaySchedulerConfig
 from nerfstudio.engine.trainer import TrainerConfig
@@ -34,7 +36,7 @@ esplatfacto_method = MethodSpecification(
         mixed_precision=False,
         pipeline=VanillaPipelineConfig(
             datamanager=EventImageDatamanagerConfig(
-                dataparser=NerfstudioDataParserConfig(load_3D_points=True),
+                dataparser=EventNerfstudioDataParserConfig(load_3D_points=True),
                 cache_images_type="uint8",
             ),
             model=ESplatfactoModelConfig(),
@@ -86,7 +88,7 @@ esplatfacto_method_big = MethodSpecification(
         mixed_precision=False,
         pipeline=VanillaPipelineConfig(
             datamanager=EventImageDatamanagerConfig(
-                dataparser=NerfstudioDataParserConfig(load_3D_points=True),
+                dataparser=EventNerfstudioDataParserConfig(load_3D_points=True),
                 cache_images_type="uint8",
             ),
             model=ESplatfactoModelConfig(
@@ -144,7 +146,7 @@ esplatfacto_method_lite = MethodSpecification(
         mixed_precision=False,
         pipeline=VanillaPipelineConfig(
             datamanager=EventImageDatamanagerConfig(
-                dataparser=NerfstudioDataParserConfig(load_3D_points=True),
+                dataparser=EventNerfstudioDataParserConfig(load_3D_points=True),
                 cache_images_type="uint8",
             ),
             model=ESplatfactoModelConfig(),
