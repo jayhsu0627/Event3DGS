@@ -13,6 +13,7 @@ esplatfacto.egg-info/requires.txt
 esplatfacto.egg-info/top_level.txt
 esplatfacto/data/__init__.py
 esplatfacto/data/esplatfacto_datamanager.py
+esplatfacto/data/event_nerfstudio_dataparser.py
 esplatfacto/data/utils/__init__.py
 esplatfacto/data/utils/data_loader_split.py
 esplatfacto/data/utils/module_3dgs_sample_ray_split.py

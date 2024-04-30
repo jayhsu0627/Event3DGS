@@ -79,7 +79,7 @@ esplatfacto_method = MethodSpecification(
 
 esplatfacto_method_big = MethodSpecification(
     config=TrainerConfig(
-        method_name="esplatfacto",
+        method_name="esplatfacto-big",
         steps_per_eval_image=100,
         steps_per_eval_batch=0,
         steps_per_save=2000,
