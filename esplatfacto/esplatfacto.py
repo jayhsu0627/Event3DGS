@@ -948,30 +948,3 @@ class ESplatfactoModel(Model):
         images_dict = {"img": combined_rgb}
 
         return metrics_dict, images_dict
-
-
-
-
-
-
-
-
-
-# from data_loader_split import load_event_data_split
-# from module_3dgs_sample_ray_split import CameraManager
-
-# camera_mgr = CameraManager(learnable=False)
-
-# ray_samplers = load_event_data_split('C:/Users/sjxu/3_Event_3DGS/Event3DGS/data',
-#                                     'chick',
-#                                     camera_mgr=camera_mgr,
-#                                     split='train',
-#                                     skip=1,
-#                                     max_winsize=1,
-#                                     use_ray_jitter=True,
-#                                     is_colored=True,
-#                                     polarity_offset=0.0,
-#                                     cycle=False,
-#                                     is_rgb_only=False,
-#                                     randomize_winlen=True,
-#                                     win_constant_count=0)
