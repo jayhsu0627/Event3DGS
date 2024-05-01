@@ -43,6 +43,22 @@ TODO: edit `class ExportGaussianSplat(Exporter)` in `exporter.py`
     assert isinstance(pipeline.model, SplatfactoModel)
 AssertionError
 ```
+- 
+
+```test
+
+ray_samplers = load_event_data_split(args.datadir, args.scene, camera_mgr=camera_mgr, split=args.train_split,
+                                         skip=args.trainskip, max_winsize=args.winsize,
+                                         use_ray_jitter=args.use_ray_jitter, is_colored=args.is_colored,
+                                         polarity_offset=args.polarity_offset, cycle=args.is_cycled,
+                                         is_rgb_only=args.is_rgb_only, randomize_winlen=args.use_random_window_len,
+                                         win_constant_count=args.use_window_constant_count)
+
+To see how "load_event_data_split" determine
+
+prev_file = img_files[(i-winsize+len(img_files))%len(img_files)]
+curr_file = img_files[i]
+```
 
 <!-- ## Relevancy Map NormalizVation
 By default, the viewer shows **raw** relevancy scaled with the turbo colormap. As values lower than 0.5 correspond to irrelevant regions, **we recommend setting the `range` parameter to (-1.0, 1.0)**. To match the visualization from the paper, check the `Normalize` tick-box, which stretches the values to use the full colormap.
