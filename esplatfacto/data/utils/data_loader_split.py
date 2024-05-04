@@ -3,7 +3,7 @@ import numpy as np
 import imageio
 import logging
 import glob
-from module_3dgs_sample_ray_split import RaySamplerSingleEventStream
+from data.utils.module_3dgs_sample_ray_split import RaySamplerSingleEventStream
 
 logger = logging.getLogger(__package__)
 logger = logging.getLogger(__name__)
@@ -140,8 +140,13 @@ def load_event_data_split(basedir, scene, split, camera_mgr, skip=1, max_winsize
                       np.concatenate((ps[start:], ps[:end])),
                      )
         # print(events)
+        print(start_time, end_time, start, end, (i-winsize+len(img_files))%len(img_files), i )
 
         H, W = 260, 346
+        print("prev_file:", (i-winsize+len(img_files))%len(img_files))
+        print("curr_file:", i)
+        print("delta:", i- (i-winsize+len(img_files))%len(img_files))
+
         prev_file = img_files[(i-winsize+len(img_files))%len(img_files)]
         curr_file = img_files[i]
         curr_mask = mask_files[i]

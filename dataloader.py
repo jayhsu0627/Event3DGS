@@ -26,10 +26,20 @@ class EventImageDatamanager:
     The BM4D is the deblur stage, which take quite a long time. Default is off, but it can significantly
     improve synthetic datasets.
     """
-    def __init__(self, event_file_path, pose_directory, out_directory, width, height, debayer_method=None, sigma=0):
+    def __init__(self, event_file_path, pose_directory, out_directory, width, height, debayer_method=None, is_real= False , sigma=0):
         self.img_size = (height, width)
         self.debayer = False
-        self.is_colored = True
+        self.is_real = is_real # Real or Synthetic data
+        if self.is_real: self.cycle, self.max_winsize = True, 100
+        else: self.cycle, self.max_winsize = False, 1
+        self.randomize_winlen = True
+        self.events_collections = {}
+        self.files = []
+        self.idx = []
+        self.idx_pre = []
+        self.frame = []
+        self.frame_pre  = []
+
         # self.img = np.zeros(self.img_size, dtype=np.int8)
         self.event_file_path = event_file_path
         self.pose_directory = pose_directory
@@ -56,39 +66,35 @@ class EventImageDatamanager:
         self.event_data = np.load(self.event_file_path)
         self.timestamp, self.x, self.y, self.pol = self.event_data['t'], self.event_data['x'], self.event_data['y'], self.event_data['p']
         print("Data length:", len(self.timestamp))
-        self.idx = []
-        j=0
-        t = self.timestamp[0]
-        frame = 0
-        for j in range(107500):
-            if self.timestamp[j]>t:
-                print("Data shutter:", j)
-                break
-        start_pt = 0
-        for k in range(start_pt,len(self.timestamp)):
-            if self.timestamp[k]>t:
-                # print('Data streams per frame:',k-start_pt,t)
-                start_pt = k
-                t+= (self.timestamp[-1] - self.timestamp[0])/1000
-                self.idx.append(k-1)
-                continue
-        print("idx: ", self.idx)
-        print("Frame: ", len(self.idx))
+
+        self.get_Event_Pair()
+
+        # print("idx: ", self.idx)
+        # print("pre_idx: ", self.idx_pre)
+        print("events_collections: ")
+        for key in self.events_collections:
+            print(key)
+            print(self.events_collections[key])
 
     def loadEventTXTData(self):
-        infile = open(self.event_file_path, 'r')
-        timestamp, x, y, pol = [], [], [], []
-        for line in infile:
-            words = line.split()
-            timestamp.append(float(words[0]))
-            x.append(int(words[1]))
-            y.append(int(words[2]))
-            pol.append(int(words[3]))
-        infile.close()
-        self.timestamp, self.x, self.y, self.pol = timestamp, x, y, pol
+        self.event_data = np.loadtxt(self.event_file_path,dtype={'formats': ('f4', 'i4', 'i4', 'i4')})
+        # print(self.event_data)
+        # print(self.event_data.shape)
+        self.timestamp, self.x, self.y, self.pol = self.event_data[:,0], self.event_data[:,1], self.event_data[:,2], self.event_data[:,3]
 
         print("Data length:", len(self.timestamp))
-        self.idx = []
+        self.get_Event_Pair()
+
+        # print("idx: ", self.idx)
+        # print("pre_idx: ", self.idx_pre)
+        print("events_collections: ")
+        for key in self.events_collections:
+            print(key)
+            print(self.events_collections[key])
+
+    def get_Event_Pair(self):
+        max_winsize = self.max_winsize
+        start_range = 0 if self.cycle else 1+max_winsize
         j=0
         t = self.timestamp[0]
         frame = 0
@@ -102,10 +108,77 @@ class EventImageDatamanager:
                 # print('Data streams per frame:',k-start_pt,t)
                 start_pt = k
                 t+= (self.timestamp[-1] - self.timestamp[0])/1000
-                self.idx.append(k-1)
+                self.files.append(k-1)
                 continue
-        print("idx: ", self.idx)
-        print("Frame: ", len(self.idx))
+
+        # self.events_collections["idx"] = self.idx
+        
+        self.events_collections["events"] = []
+
+        # Calculate start and end streams and load events
+
+        for i in range(start_range, len(self.files)):
+            if self.randomize_winlen:
+                winsize = np.random.randint(1, max_winsize+1)
+            else:
+                winsize = max_winsize
+
+            # what is -1 for? for i=last frame covering all events
+            start_time = (i-winsize)/(len(self.files)-1)
+            if start_time < 0:
+                start_time += 1
+            end_time = (i)/(len(self.files)-1)
+
+            # Ending Streams lines
+            end = np.searchsorted(self.timestamp, end_time * self.timestamp.max())
+
+            # if win_constant_count != 0:
+            #     # TODO: there could be a bug with windows in the start, e.g., end-win_constant_count<0
+            #     #       please, check if the windows are correctly composed in that case
+            #     start_time = self.timestamp[end-win_constant_count]/self.timestamp.max()
+
+            #     if win_constant_count > end:
+            #         start_time = start_time - 1
+
+            #     winsize = int(i-start_time*(len(self.files)-1))
+            #     assert(winsize>0)
+            #     start_time = (i-winsize)/(len(self.files)-1)
+
+            #     if start_time < 0:
+            #         start_time += 1
+
+            # Find Start Streams lines
+            start = np.searchsorted(self.timestamp, start_time * self.timestamp.max())
+            # print(start, end, end-start)
+            if start <= end:
+                # normal case: take the interval between
+                events = (self.x[start:end], self.y[start:end], self.timestamp[start:end], self.pol[start:end])
+            else:
+                # loop over case: compose tail with head events
+                events = (np.concatenate((self.x[start:], self.x[:end])),
+                        np.concatenate((self.y[start:], self.y[:end])),
+                        np.concatenate((self.timestamp[start:], self.timestamp[:end])),
+                        np.concatenate((self.pol[start:], self.pol[:end])),
+                        )
+            # print(events)
+
+            # print(start_time, end_time, start, end, (i-winsize+len(self.files))%len(self.files), i )
+            # Corresponding stream number of t0
+            self.idx_pre.append(start)
+            # Corresponding stream number of t
+            self.idx.append(end)
+            # t0 frame: for example 3 (uniform pick from 0-100)
+            self.frame_pre.append((i-winsize+len(self.files))%len(self.files))
+            # t frame: for example 100
+            self.frame.append(i)
+            self.events_collections["events"].append(events)
+
+        self.events_collections["idx_pre"] = self.idx_pre
+        self.events_collections["idx"] = self.idx
+        self.events_collections["frame_pre"] = self.frame_pre
+        self.events_collections["frame"] = self.frame
+        
+        return self.events_collections
 
     def getFileType(self):
         root, ext = os.path.splitext(self.event_file_path)
@@ -215,7 +288,7 @@ class EventImageDatamanager:
     def ImgSave(self, img, file_path, file_name):
         # Save the image to a PNG file
         imageio.imwrite(file_path + '/' + str(file_name) +'.png', img)
-    
+
     def convert_to_images(self):
         """nerfstudio style/format
         """
@@ -228,9 +301,11 @@ class EventImageDatamanager:
         frame = 0
         self.img = np.zeros(self.img_size , dtype=np.float32) + np.log(127) / 2.2
         self.bayer = np.zeros(self.img_size, np.float32)
-        start = 0
         num_events = len(self.timestamp)
-        # print("Load event img at :", num_events)
+        
+        # if not self.is_real:
+
+        start = 0
         while frame < len(self.idx)-1:
             for i in range(start, num_events-1):
                 img_name = str(f"r_{'{:05d}'.format(frame)}")
@@ -266,6 +341,43 @@ class EventImageDatamanager:
                     print(OUT_PATH, img_name)
 
                     self.ImgSave( self.bayer, OUT_PATH, img_name)
+        # else:
+        #     # Event camera use a uniform distribution back choosing its starting frame
+        #     while frame < len(self.idx)-1:
+        #         for i in range(start, num_events-1):
+        #             img_name = str(f"r_{'{:05d}'.format(frame)}")
+        #             self.img[self.y[i], self.x[i]] += self.pol[i]
+        #             # If the event frame reach the camera frame, trigger save
+        #             if frame == len(self.idx): break
+        #             if i == self.idx[frame]:
+        #                 print(i, frame,self.idx[frame])
+        #                 frame += 1
+        #                 bg_mask = self.img == np.log(127) / 2.2
+        #                 self.img_temp = np.tile(self.img[..., None], (1, 1, 3))
+        #                 self.bayer = self.scale_img(self.img_temp)
+
+        #                 self.img_gray = self.bayer
+        #                 self.bayer = self.F_tile * self.img_gray
+        #                 self.bayer = np.clip(np.exp(self.bayer * 2.2), 0, 255).astype(np.uint8)
+
+        #                 if self.debayer_method:
+        #                     # mosaic
+        #                     self.CFA = mosaicing_CFA_Bayer(self.img_gray)
+        #                     # Menon2007
+        #                     if self.debayer_method == "bilinear":
+        #                         self.bayer = demosaicing_CFA_Bayer_bilinear(self.CFA)
+        #                     if self.debayer_method == "Malvar2004":
+        #                         self.bayer = demosaicing_CFA_Bayer_Malvar2004(self.CFA)
+        #                     if self.debayer_method == "Menon2007":
+        #                         self.bayer = demosaicing_CFA_Bayer_Menon2007(self.CFA)
+        #                     self.bayer = self.scale_img(self.bayer)
+
+        #                 if self.deblur:
+        #                     self.bayer = bm4d.bm4d(self.bayer, self.sigma); # white noise: include noise std
+        #                     self.bayer = self.scale_img(self.bayer)
+        #                 print(OUT_PATH, img_name)
+
+        #                 self.ImgSave( self.bayer, OUT_PATH, img_name)
 
     def PoseRead(self, file_path, frame_num):
         file_path = os.path.join(file_path, 'r_'+'{:05d}'.format(frame_num) + ".txt")
@@ -310,7 +422,7 @@ class EventImageDatamanager:
         if tb > 0:
             tb = 0
         return (oa+ta*da+ob+tb*db) * 0.5, denom
- 
+
     def convert_to_json(self):
         """nerfstudio style/format
         """
@@ -318,15 +430,15 @@ class EventImageDatamanager:
         text = os.path.normpath(self.pose_directory) # + '/text')
         OUT_PATH = os.path.normpath(self.out_directory + '/' + "transforms.json")
         # sparce = os.path.normpath(args.scenedir + '/sparse')
-                
+
         # 1 SIMPLE_RADIAL 2048 1536 1580.46 1024 768 0.0045691
         # 1 OPENCV 3840 2160 3178.27 3182.09 1920 1080 0.159668 -0.231286 -0.00123982 0.00272224
         # 1 RADIAL 1920 1080 1665.1 960 540 0.0672856 -0.0761443
 
         w = self.img_size[1]
         h = self.img_size[0]
-        fl_x = 480.55
-        fl_y = 480.55
+        fl_x = 389.25 if self.is_real else 480.55
+        fl_y = 389.25 if self.is_real else 480.55
         k1 = 0
         k2 = 0
         p1 = 0
@@ -375,13 +487,12 @@ class EventImageDatamanager:
                 # R = qvec2rotmat(-qvec)
                 # t = tvec.reshape([3,1])
                 # m = np.concatenate([np.concatenate([R, t], 1), bottom], 0)
-                
+
                 # m = self.PoseRead(pose_path, i)
                 # c2w = np.linalg.inv(m)
-
-
                 # up += c2w[0:3,1]
-                
+
+                # https://github.com/nerfstudio-project/nerfstudio/issues/1504
                 c2w = self.PoseRead(pose_path, i)
                 c2w[0:3,2] *= -1 # flip the y and z axis
                 c2w[0:3,1] *= -1
@@ -420,7 +531,7 @@ class EventImageDatamanager:
         #             totw += w
         # totp /= totw
         # print(totp) # the cameras are looking at totp
-        
+
         # for f in out["frames"]:
         #     f["transform_matrix"][0:3,3] -= totp
 
@@ -429,7 +540,7 @@ class EventImageDatamanager:
             avglen += np.linalg.norm(f["transform_matrix"][0:3,3])
         avglen /= nframes
         print("avg camera distance from origin", avglen)
-        
+
         for f in out["frames"]:
             f["transform_matrix"][0:3,3] *= 4.0 / avglen # scale to "nerf sized"
 
@@ -440,6 +551,7 @@ class EventImageDatamanager:
         print(f"writing {OUT_PATH}")
         with open(OUT_PATH, "w") as outfile:
             json.dump(out, outfile, indent=2)
+
 
 # def scale_img( array):
 #     min_val = np.min(array)
