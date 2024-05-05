@@ -30,7 +30,9 @@ from PIL import Image
 
 from nerfstudio.cameras import camera_utils
 from nerfstudio.cameras.cameras import CAMERA_MODEL_TO_TYPE, Cameras, CameraType
-from nerfstudio.data.dataparsers.base_dataparser import DataParser, DataParserConfig, DataparserOutputs
+# from nerfstudio.data.dataparsers.base_dataparser import DataParser, DataParserConfig, DataparserOutputs
+from esplatfacto.data.esplatfacto_dataparser import DataParser, DataParserConfig, DataparserOutputs
+
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.data.utils.dataparsers_utils import (
     get_train_eval_split_all,
@@ -105,6 +107,9 @@ class Nerfstudio(DataParser):
         mask_filenames = []
         depth_filenames = []
         poses = []
+        pre_poses = []
+
+        pre_camera = [] # store the order of the pre_camera frame (t_0)
 
         fx_fixed = "fl_x" in meta
         fy_fixed = "fl_y" in meta
@@ -173,6 +178,8 @@ class Nerfstudio(DataParser):
 
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
+            pre_camera.append(frame["pre_camera"])
+
             if "mask_path" in frame:
                 mask_filepath = Path(frame["mask_path"])
                 mask_fname = self._get_fname(
@@ -258,8 +265,39 @@ class Nerfstudio(DataParser):
         mask_filenames = [mask_filenames[i] for i in indices] if len(mask_filenames) > 0 else []
         depth_filenames = [depth_filenames[i] for i in indices] if len(depth_filenames) > 0 else []
 
+        ###### Reordering for pre_cameras ######
+        # pre_poses = torch.empty_like(poses)  # record poses
+        # num, m, n = poses.shape
+
+        
+        pre_camera.append(frame["pre_camera"])
+
+        for i in pre_camera:
+            pre_poses.append(np.array(frames[(i-1)]["transform_matrix"]))
+            # pre_poses[i] = poses[i-1]
+            # print(i-1)
+            # pre_poses[(i-1)//100] = poses[(i-1)//100]
+
+        pre_poses = torch.from_numpy(np.array(pre_poses).astype(np.float32))
+        pre_poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
+            pre_poses,
+            method=orientation_method,
+            center_method=self.config.center_method,
+        )
+        # Scale pre_poses
+        scale_factor = 1.0
+        if self.config.auto_scale_poses:
+            scale_factor /= float(torch.max(torch.abs(pre_poses[:, :3, 3])))
+        scale_factor *= self.config.scale_factor
+
+        pre_poses[:, :3, 3] *= scale_factor
+
+        ###### -------------------------- ######
+        # print("before:",len(poses))
         idx_tensor = torch.tensor(indices, dtype=torch.long)
         poses = poses[idx_tensor]
+        pre_poses = pre_poses[idx_tensor]
+        # print("after:",len(poses))
 
         # in x,y,z order
         # assumes that the scene is centered at the origin
@@ -303,6 +341,7 @@ class Nerfstudio(DataParser):
         if (camera_type in [CameraType.FISHEYE, CameraType.FISHEYE624]) and (fisheye_crop_radius is not None):
             metadata["fisheye_crop_radius"] = fisheye_crop_radius
 
+
         cameras = Cameras(
             fx=fx,
             fy=fy,
@@ -316,8 +355,27 @@ class Nerfstudio(DataParser):
             metadata=metadata,
         )
 
+
+        ###### Convert reordered_fx to a torch tensor ######
+
+        pre_cameras = Cameras(
+            fx=fx,
+            fy=fy,
+            cx=cx,
+            cy=cy,
+            distortion_params=distortion_params,
+            height=height,
+            width=width,
+            camera_to_worlds=pre_poses[:, :3, :4],
+            camera_type=camera_type,
+            metadata=metadata,
+        )
+
+        ###### -------------------------- ######
+
         assert self.downscale_factor is not None
         cameras.rescale_output_resolution(scaling_factor=1.0 / self.downscale_factor)
+        pre_cameras.rescale_output_resolution(scaling_factor=1.0 / self.downscale_factor)
 
         # The naming is somewhat confusing, but:
         # - transform_matrix contains the transformation to dataparser output coordinates from saved coordinates.
@@ -411,6 +469,7 @@ class Nerfstudio(DataParser):
         dataparser_outputs = DataparserOutputs(
             image_filenames=image_filenames,
             cameras=cameras,
+            pre_cameras=pre_cameras,
             scene_box=scene_box,
             mask_filenames=mask_filenames if len(mask_filenames) > 0 else None,
             dataparser_scale=scale_factor,
@@ -854,28 +913,3 @@ class EventImageDatamanager:
         print(f"writing {OUT_PATH}")
         with open(OUT_PATH, "w") as outfile:
             json.dump(out, outfile, indent=2)
-
-
-# ## Example
-# eventData = EventImageDatamanager(file_path, 346, 260, debayer_method="Menon2007", sigma=0)
-
-# t_0 = eventData.idx[0]
-# t = eventData.idx[500]
-
-# print(t_0, t)
-
-# img_t0_gray, img_t0 = eventData.convertCameraImg(t_0)
-# img_t_gray, img_t = eventData.convertCameraImg(t)
-# img_dt_gray, img_dt = eventData.AccuDiffCameraImg(t_0, t)
-
-# eventData.EventImgPlot(img_t0_gray)
-# eventData.EventImgPlot(img_t_gray)
-# eventData.EventImgPlot(img_dt_gray)
-
-# eventData.EventImgPlot(img_t0)
-# eventData.EventImgPlot(img_t)
-# eventData.EventImgPlot(img_dt)
-
-# eventData.ImgSave(img_dt, "/content/", "img_dt")
-# eventData.PoseRead("/content/", 5)
-# eventData.convert_to_json()

@@ -45,11 +45,14 @@ from typing_extensions import assert_never
 from nerfstudio.cameras.camera_utils import fisheye624_project, fisheye624_unproject_helper
 from nerfstudio.cameras.cameras import Cameras, CameraType
 from nerfstudio.configs.dataparser_configs import AnnotatedDataParserUnion
-from nerfstudio.data.datamanagers.base_datamanager import DataManager, DataManagerConfig, TDataset
+# from nerfstudio.data.datamanagers.base_datamanager import DataManager, DataManagerConfig, TDataset
+from esplatfacto.data.base_datamanager import DataManager, DataManagerConfig, TDataset
+
 from nerfstudio.data.dataparsers.base_dataparser import DataparserOutputs
 # from nerfstudio.data.dataparsers.nerfstudio_dataparser import NerfstudioDataParserConfig
 from esplatfacto.data.event_nerfstudio_dataparser import EventNerfstudioDataParserConfig
-from nerfstudio.data.datasets.base_dataset import InputDataset
+# from nerfstudio.data.datasets.base_dataset import InputDataset
+from esplatfacto.data.base_dataset import InputDataset
 from nerfstudio.utils.misc import get_orig_class
 from nerfstudio.utils.rich_utils import CONSOLE
 
@@ -290,7 +293,8 @@ class EventImageDatamanager(DataManager, Generic[TDataset]):
     def next_train(self, step: int) -> Tuple[Cameras, Dict]:
         """Returns the next training batch
 
-        Returns a Camera instead of raybundle"""
+        Returns a Camera instead of raybundle
+        Add t0 output for last frame. """
         image_idx = self.train_unseen_cameras.pop(random.randint(0, len(self.train_unseen_cameras) - 1))
         # Make sure to re-populate the unseen cameras list if we have exhausted it
         if len(self.train_unseen_cameras) == 0:
@@ -301,10 +305,21 @@ class EventImageDatamanager(DataManager, Generic[TDataset]):
 
         assert len(self.train_dataset.cameras.shape) == 1, "Assumes single batch dimension"
         camera = self.train_dataset.cameras[image_idx : image_idx + 1].to(self.device)
+        
+        # print(self.train_dataset.cameras)
+        # print(self.train_dataset.pre_cameras)
+
+        camera_pre = self.train_dataset.pre_cameras[image_idx : image_idx + 1].to(self.device) # Load pre_camera matrix from datasets
+
         if camera.metadata is None:
             camera.metadata = {}
+        if camera_pre.metadata is None:
+            camera_pre.metadata = {}
+
         camera.metadata["cam_idx"] = image_idx
-        return camera, data
+        camera_pre.metadata["cam_idx"] = image_idx
+
+        return camera, camera_pre, data
 
     def next_eval(self, step: int) -> Tuple[Cameras, Dict]:
         """Returns the next evaluation batch
@@ -318,7 +333,9 @@ class EventImageDatamanager(DataManager, Generic[TDataset]):
         data["image"] = data["image"].to(self.device)
         assert len(self.eval_dataset.cameras.shape) == 1, "Assumes single batch dimension"
         camera = self.eval_dataset.cameras[image_idx : image_idx + 1].to(self.device)
-        return camera, data
+        camera_pre = self.eval_dataset.pre_cameras[image_idx : image_idx + 1].to(self.device)
+
+        return camera, camera_pre, data
 
     def next_eval_image(self, step: int) -> Tuple[Cameras, Dict]:
         """Returns the next evaluation batch

@@ -5,6 +5,8 @@ esplatfacto/ddp_model.py
 esplatfacto/ddp_train_3dgs.py
 esplatfacto/esplatfacto.py
 esplatfacto/esplatfacto_config.py
+esplatfacto/esplatfacto_pipeline.py
+esplatfacto/temp.py
 esplatfacto.egg-info/PKG-INFO
 esplatfacto.egg-info/SOURCES.txt
 esplatfacto.egg-info/dependency_links.txt
@@ -12,7 +14,9 @@ esplatfacto.egg-info/entry_points.txt
 esplatfacto.egg-info/requires.txt
 esplatfacto.egg-info/top_level.txt
 esplatfacto/data/__init__.py
+esplatfacto/data/base_dataset.py
 esplatfacto/data/esplatfacto_datamanager.py
+esplatfacto/data/esplatfacto_dataparser.py
 esplatfacto/data/event_nerfstudio_dataparser.py
 esplatfacto/data/utils/__init__.py
 esplatfacto/data/utils/data_loader_split.py

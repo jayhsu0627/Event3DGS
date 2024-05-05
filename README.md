@@ -28,8 +28,13 @@ Now that ESplat is installed you can play with it!
 - Launch training with `ns-train esplatfacto --data <data_folder>`. This specifies a data folder to use. For more details, see [Nerfstudio documentation](https://docs.nerf.studio/en/latest/quickstart/first_nerf.html). 
 
 ```
-ns-train esplatfacto --data C:\Users\sjxu\3_Event_3DGS\Data\nerfstudio\bww_entrance
+ns-train esplatfacto --data C:\Users\sjxu\3_Event_3DGS\Data\nerfstudio\sewing
 ```
+
+```
+ns-train esplatfacto-big --data C:\Users\sjxu\3_Event_3DGS\Data\nerfstudio\sewing --pipeline.model.use_scale_regularization True --pipeline.model.cull_alpha_thresh=0.005 --pipeline.model.continue_cull_post_densification=False
+```
+
 
 - Connect to the viewer by forwarding the viewer port (we use VSCode to do this), and click the link to `viewer.nerf.studio` provided in the output of the train script. Use the viewer running locally at: `http://localhost:7007`
 

@@ -49,6 +49,16 @@ from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
 
+TINY_NUMBER = 1e-6      # float32 only has 7 decimal digits precision
+
+
+# misc utils
+def img2mse(x, y, mask=None):
+    if mask is None:
+        return torch.mean((x - y) * (x - y))
+    else:
+        return torch.sum((x - y) * (x - y) * mask.unsqueeze(-1)) / (torch.sum(mask) * x.shape[-1] + TINY_NUMBER)
+
 def random_quat_tensor(N):
     """
     Defines a random quaternion tensor of shape (N, 4)
@@ -691,7 +701,7 @@ class ESplatfactoModel(Model):
         # shift the camera to center of scene looking at center
         R = camera.camera_to_worlds[0, :3, :3]  # 3 x 3
         T = camera.camera_to_worlds[0, :3, 3:4]  # 3 x 1
-
+        # print(camera)
         # flip the z and y axes to align with gsplat conventions
         R_edit = torch.diag(torch.tensor([1, -1, -1], device=self.device, dtype=R.dtype))
         R = R @ R_edit
@@ -832,7 +842,7 @@ class ESplatfactoModel(Model):
         else:
             return image
 
-    def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
+    def get_metrics_dict(self, outputs, outputs_pre, batch) -> Dict[str, torch.Tensor]:
         """Compute and returns metrics.
 
         Args:
@@ -842,14 +852,16 @@ class ESplatfactoModel(Model):
         gt_rgb = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
         metrics_dict = {}
         predicted_rgb = outputs["rgb"]
-        metrics_dict["psnr"] = self.psnr(predicted_rgb, gt_rgb)
+        pre_predicted_rgb = outputs_pre["rgb"]
+
+        metrics_dict["psnr"] = self.psnr(predicted_rgb - pre_predicted_rgb, gt_rgb)
 
         metrics_dict["gaussian_count"] = self.num_points
 
         # self.camera_optimizer.get_metrics_dict(metrics_dict)
         return metrics_dict
 
-    def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
+    def get_loss_dict(self, outputs, outputs_pre, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
 
         Args:
@@ -859,6 +871,7 @@ class ESplatfactoModel(Model):
         """
         gt_img = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
         pred_img = outputs["rgb"]
+        pre_pred_img = outputs_pre["rgb"]
 
         # Set masked part of both ground-truth and rendered image to black.
         # This is a little bit sketchy for the SSIM loss.
@@ -869,9 +882,20 @@ class ESplatfactoModel(Model):
             assert mask.shape[:2] == gt_img.shape[:2] == pred_img.shape[:2]
             gt_img = gt_img * mask
             pred_img = pred_img * mask
+            pre_pred_img = pre_pred_img * mask
 
-        Ll1 = torch.abs(gt_img - pred_img).mean()
-        simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], pred_img.permute(2, 0, 1)[None, ...])
+        # Ll1 = torch.abs(gt_img - pred_img).mean()
+
+        # simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], pred_img.permute(2, 0, 1)[None, ...])
+
+        # diff = torch.log(ret['rgb']**2.2+eps)-torch.log(prev_ret['rgb']**2.2+eps)
+        diff = pred_img - pre_pred_img
+
+        # diff = diff * color_mask
+        event_mask = None
+        THR = 0.5
+        event_loss = img2mse(diff, gt_img*THR, event_mask)
+
         if self.config.use_scale_regularization and self.step % 10 == 0:
             scale_exp = torch.exp(self.scales)
             scale_reg = (
@@ -884,10 +908,11 @@ class ESplatfactoModel(Model):
             scale_reg = 0.1 * scale_reg.mean()
         else:
             scale_reg = torch.tensor(0.0).to(self.device)
-
+        # print("event_loss:=====", event_loss)
         return {
 
-                    "main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss,
+                    # "main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss,
+                    "main_loss": event_loss,
 
                     "scale_reg": scale_reg,
 

@@ -13,7 +13,8 @@ from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.plugins.types import MethodSpecification
 # from nerfstudio.data.datamanagers.full_images_datamanager import EventImageDatamanagerConfig
 from esplatfacto.data.esplatfacto_datamanager import EventImageDatamanagerConfig
-from nerfstudio.pipelines.base_pipeline import VanillaPipelineConfig
+# from nerfstudio.pipelines.base_pipeline import VanillaPipelineConfig
+from esplatfacto.esplatfacto_pipeline import EsplatPipelineConfig
 
 # from esplatfacto.data.esplatfacto_datamanager import ESplatfactoDataManagerConfig
 from esplatfacto.esplatfacto import ESplatfactoModelConfig
@@ -32,9 +33,9 @@ esplatfacto_method = MethodSpecification(
         steps_per_eval_batch=0,
         steps_per_save=2000,
         steps_per_eval_all_images=1000,
-        max_num_iterations=30000,
+        max_num_iterations=50000,
         mixed_precision=False,
-        pipeline=VanillaPipelineConfig(
+        pipeline=EsplatPipelineConfig(
             datamanager=EventImageDatamanagerConfig(
                 dataparser=EventNerfstudioDataParserConfig(load_3D_points=True),
                 cache_images_type="uint8",
@@ -84,9 +85,9 @@ esplatfacto_method_big = MethodSpecification(
         steps_per_eval_batch=0,
         steps_per_save=2000,
         steps_per_eval_all_images=1000,
-        max_num_iterations=30000,
+        max_num_iterations=50000,
         mixed_precision=False,
-        pipeline=VanillaPipelineConfig(
+        pipeline=EsplatPipelineConfig(
             datamanager=EventImageDatamanagerConfig(
                 dataparser=EventNerfstudioDataParserConfig(load_3D_points=True),
                 cache_images_type="uint8",
@@ -142,9 +143,9 @@ esplatfacto_method_lite = MethodSpecification(
         steps_per_eval_batch=0,
         steps_per_save=2000,
         steps_per_eval_all_images=1000,
-        max_num_iterations=30000,
+        max_num_iterations=50000,
         mixed_precision=False,
-        pipeline=VanillaPipelineConfig(
+        pipeline=EsplatPipelineConfig(
             datamanager=EventImageDatamanagerConfig(
                 dataparser=EventNerfstudioDataParserConfig(load_3D_points=True),
                 cache_images_type="uint8",

@@ -30,8 +30,9 @@ class EventImageDatamanager:
         self.img_size = (height, width)
         self.debayer = False
         self.is_real = is_real # Real or Synthetic data
+        self.cycle = True
         if self.is_real: self.cycle, self.max_winsize = True, 100
-        else: self.cycle, self.max_winsize = False, 1
+        else: self.max_winsize = 1
         self.randomize_winlen = True
         self.events_collections = {}
         self.files = []
@@ -292,7 +293,6 @@ class EventImageDatamanager:
     def convert_to_images(self):
         """nerfstudio style/format
         """
-        text = os.path.normpath(self.pose_directory) # + '/text')
         OUT_PATH = os.path.normpath(self.out_directory + '/' + "images" + "/")
         # Check if the directory exists, create it if it doesn't
         if not os.path.exists(OUT_PATH):
@@ -306,12 +306,12 @@ class EventImageDatamanager:
         # if not self.is_real:
 
         start = 0
-        while frame < len(self.idx)-1:
+        while frame < len(self.files)-1:
             for i in range(start, num_events-1):
                 img_name = str(f"r_{'{:05d}'.format(frame)}")
                 self.img[self.y[i], self.x[i]] += self.pol[i]
                 # If the event frame reach the camera frame, trigger save
-                if frame == len(self.idx): break
+                if frame == len(self.files): break
                 if i == self.idx[frame]:
                     print(i, frame,self.idx[frame])
                     frame += 1
@@ -341,43 +341,60 @@ class EventImageDatamanager:
                     print(OUT_PATH, img_name)
 
                     self.ImgSave( self.bayer, OUT_PATH, img_name)
-        # else:
-        #     # Event camera use a uniform distribution back choosing its starting frame
-        #     while frame < len(self.idx)-1:
-        #         for i in range(start, num_events-1):
-        #             img_name = str(f"r_{'{:05d}'.format(frame)}")
-        #             self.img[self.y[i], self.x[i]] += self.pol[i]
-        #             # If the event frame reach the camera frame, trigger save
-        #             if frame == len(self.idx): break
-        #             if i == self.idx[frame]:
-        #                 print(i, frame,self.idx[frame])
-        #                 frame += 1
-        #                 bg_mask = self.img == np.log(127) / 2.2
-        #                 self.img_temp = np.tile(self.img[..., None], (1, 1, 3))
-        #                 self.bayer = self.scale_img(self.img_temp)
 
-        #                 self.img_gray = self.bayer
-        #                 self.bayer = self.F_tile * self.img_gray
-        #                 self.bayer = np.clip(np.exp(self.bayer * 2.2), 0, 255).astype(np.uint8)
+    def convert_to_images_uniform(self):
+        """nerfstudio style/format; Use the uniform selected previous frame stroed in self.events_collections
+            Designed for real event camera data.
+        """
+        OUT_PATH = os.path.normpath(self.out_directory + '/' + "images" + "/")
+        # Check if the directory exists, create it if it doesn't
+        if not os.path.exists(OUT_PATH):
+            os.makedirs(OUT_PATH)
+        
+        # if not self.is_real:
 
-        #                 if self.debayer_method:
-        #                     # mosaic
-        #                     self.CFA = mosaicing_CFA_Bayer(self.img_gray)
-        #                     # Menon2007
-        #                     if self.debayer_method == "bilinear":
-        #                         self.bayer = demosaicing_CFA_Bayer_bilinear(self.CFA)
-        #                     if self.debayer_method == "Malvar2004":
-        #                         self.bayer = demosaicing_CFA_Bayer_Malvar2004(self.CFA)
-        #                     if self.debayer_method == "Menon2007":
-        #                         self.bayer = demosaicing_CFA_Bayer_Menon2007(self.CFA)
-        #                     self.bayer = self.scale_img(self.bayer)
+        start = 0
+        for frame in self.events_collections["frame"]:
+            print(frame, self.events_collections["idx_pre"][frame], self.events_collections["idx"][frame])
+            temp_event = self.events_collections["events"][frame]
+            # print(temp_event)
+            print(temp_event[0].shape)
+            curr_x, curr_y, _, curr_pol = temp_event[0], temp_event[1], temp_event[2], temp_event[3]
+            self.img = np.zeros(self.img_size , dtype=np.float32) + np.log(127) / 2.2
+            self.bayer = np.zeros(self.img_size, np.float32)
 
-        #                 if self.deblur:
-        #                     self.bayer = bm4d.bm4d(self.bayer, self.sigma); # white noise: include noise std
-        #                     self.bayer = self.scale_img(self.bayer)
-        #                 print(OUT_PATH, img_name)
+            for i in range(0, len(curr_x)):
+                img_name = str(f"r_{'{:05d}'.format(frame)}")
+                self.img[curr_y[i], curr_x[i]] += curr_pol[i]
 
-        #                 self.ImgSave( self.bayer, OUT_PATH, img_name)
+            print(frame, img_name)
+            bg_mask = self.img == np.log(127) / 2.2
+            self.img_temp = np.tile(self.img[..., None], (1, 1, 3))
+            self.bayer = self.scale_img(self.img_temp)
+
+            self.img_gray = self.bayer
+            self.bayer = self.F_tile * self.img_gray
+            self.bayer = np.clip(np.exp(self.bayer * 2.2), 0, 255).astype(np.uint8)
+
+            if self.debayer_method:
+                # mosaic
+                self.CFA = mosaicing_CFA_Bayer(self.img_gray)
+                # Menon2007
+                if self.debayer_method == "bilinear":
+                    self.bayer = demosaicing_CFA_Bayer_bilinear(self.CFA)
+                if self.debayer_method == "Malvar2004":
+                    self.bayer = demosaicing_CFA_Bayer_Malvar2004(self.CFA)
+                if self.debayer_method == "Menon2007":
+                    self.bayer = demosaicing_CFA_Bayer_Menon2007(self.CFA)
+                self.bayer = self.scale_img(self.bayer)
+
+            if self.deblur:
+                self.bayer = bm4d.bm4d(self.bayer, self.sigma); # white noise: include noise std
+                self.bayer = self.scale_img(self.bayer)
+            print(OUT_PATH, img_name)
+
+            self.ImgSave( self.bayer, OUT_PATH, img_name)
+            print(f"writing {OUT_PATH}")
 
     def PoseRead(self, file_path, frame_num):
         file_path = os.path.join(file_path, 'r_'+'{:05d}'.format(frame_num) + ".txt")
@@ -473,8 +490,8 @@ class EventImageDatamanager:
 
         up = np.zeros(3)
 
-        for i in range(len(self.idx)):
-            if  i % 10 == 0:
+        for i in range(len(self.files)):
+            if  i % 100 == 0:
                 # elems=line.split(" ") # 1-4 is quat, 5-7 is trans, 9ff is filename (9, if filename contains no spaces)
                 pose_path = self.pose_directory
                 name = str(f"./images/r_{'{:05d}'.format(i)}.png")
@@ -499,8 +516,8 @@ class EventImageDatamanager:
                 c2w = c2w[[1,0,2,3],:] # swap y and z
                 c2w[2,:] *= -1 # flip whole world upside down
 
-                # frame={"file_path":name,"sharpness":b,"transform_matrix": c2w}
-                frame={"file_path":name, "transform_matrix": c2w}
+                # Add pre_camera for the re-ordering in event_nerfstudio_dataparser.py
+                frame={"file_path":name, "pre_camera": self.events_collections["frame_pre"][i], "transform_matrix": c2w}
                 out["frames"].append(frame)
 
         nframes = len(out["frames"])
@@ -551,6 +568,7 @@ class EventImageDatamanager:
         print(f"writing {OUT_PATH}")
         with open(OUT_PATH, "w") as outfile:
             json.dump(out, outfile, indent=2)
+        print("Writing Completed")
 
 
 # def scale_img( array):
@@ -562,12 +580,19 @@ class EventImageDatamanager:
 
 # events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\lego\\train\\events\\test_lego1_color_init159_1e-6eps.npz'
 # eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\lego\\train\\pose",
-#                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\lego", 346, 260, debayer_method="Menon2007", sigma=0)
-# eventData.convert_to_json()
-# eventData.convert_to_images()
+#                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\lego", 346, 260, debayer_method="Menon2007", is_real=True, sigma=0)
+
+# events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\drums\\train\\events\\events.npz'
+# eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\drums\\train\\pose",
+#                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\drums", 346, 260, debayer_method="Menon2007", is_real=True, sigma=0)
+
 
 events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\real\\sewing\\train\\events\\b10_cal1_45rpm_gfox_eonly-2022_05_12_01_17_04_shift_ts1.npz'
 eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\real\\sewing\\train\\pose",
-                                "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\sewing", 346, 260, debayer_method="Menon2007", sigma=0)
+                                "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\sewing", 346, 260, debayer_method="Menon2007", is_real=True, sigma=0)
+
+
+# eventData.events_collections['frame']
 eventData.convert_to_json()
-eventData.convert_to_images()
+# eventData.convert_to_images()
+eventData.convert_to_images_uniform()
