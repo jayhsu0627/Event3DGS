@@ -47,7 +47,7 @@ esplatfacto_method = MethodSpecification(
                 "optimizer": AdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
                     lr_final=1.6e-6,
-                    max_steps=30000,
+                    max_steps=50000,
                 ),
             },
             "features_dc": {
@@ -102,7 +102,7 @@ esplatfacto_method_big = MethodSpecification(
                 "optimizer": AdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
                     lr_final=1.6e-6,
-                    max_steps=30000,
+                    max_steps=50000,
                 ),
             },
             "features_dc": {
@@ -157,7 +157,7 @@ esplatfacto_method_lite = MethodSpecification(
                 "optimizer": AdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
                     lr_final=1.6e-6,
-                    max_steps=30000,
+                    max_steps=50000,
                 ),
             },
             "features_dc": {

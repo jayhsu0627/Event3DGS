@@ -491,7 +491,7 @@ class EventImageDatamanager:
         up = np.zeros(3)
 
         for i in range(len(self.files)):
-            if  i % 100 == 0:
+            if  i % 1 == 0:
                 # elems=line.split(" ") # 1-4 is quat, 5-7 is trans, 9ff is filename (9, if filename contains no spaces)
                 pose_path = self.pose_directory
                 name = str(f"./images/r_{'{:05d}'.format(i)}.png")
@@ -587,10 +587,13 @@ class EventImageDatamanager:
 #                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\drums", 346, 260, debayer_method="Menon2007", is_real=True, sigma=0)
 
 
-events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\real\\sewing\\train\\events\\b10_cal1_45rpm_gfox_eonly-2022_05_12_01_17_04_shift_ts1.npz'
-eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\real\\sewing\\train\\pose",
-                                "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\sewing", 346, 260, debayer_method="Menon2007", is_real=True, sigma=0)
+# events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\real\\sewing\\train\\events\\b10_cal1_45rpm_gfox_eonly-2022_05_12_01_17_04_shift_ts1.npz'
+# eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\real\\sewing\\train\\pose",
+#                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\sewing", 346, 260, debayer_method="Menon2007", is_real=True, sigma=0)
 
+events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\real\\chick\\train\\events\\b10_cal1_45rpm_gfox_eonly-2022_05_12_00_53_10_shift_ts1.npz'
+eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\real\\chick\\train\\pose",
+                                "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\chick", 346, 260, debayer_method="Menon2007", is_real=True, sigma=0)
 
 # eventData.events_collections['frame']
 eventData.convert_to_json()

@@ -816,7 +816,7 @@ class ESplatfactoModel(Model):
             )[..., 0:1]  # type: ignore
             depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max())
 
-        return {"rgb": rgb, "depth": depth_im, "accumulation": alpha, "background": background}  # type: ignore
+        return {"rgb": rgb, "depth": depth_im, "accumulation": alpha, "background": background, "img_size": self.last_size}  # type: ignore
 
     def get_gt_img(self, image: torch.Tensor):
         """Compute groundtruth image with iteration dependent downscale factor for evaluation purpose
@@ -872,7 +872,7 @@ class ESplatfactoModel(Model):
         gt_img = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
         pred_img = outputs["rgb"]
         pre_pred_img = outputs_pre["rgb"]
-
+        (H, W, _) = pre_pred_img.shape
         # Set masked part of both ground-truth and rendered image to black.
         # This is a little bit sketchy for the SSIM loss.
         if "mask" in batch:
@@ -884,13 +884,40 @@ class ESplatfactoModel(Model):
             pred_img = pred_img * mask
             pre_pred_img = pre_pred_img * mask
 
+        color_mask = np.zeros((H, W, 3))
+        color_mask[0::2, 0::2, 0] = 1  # r
+        color_mask[0::2, 1::2, 1] = 1  # g
+        color_mask[1::2, 0::2, 1] = 1  # g
+        color_mask[1::2, 1::2, 2] = 1  # b
+
         # Ll1 = torch.abs(gt_img - pred_img).mean()
 
         # simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], pred_img.permute(2, 0, 1)[None, ...])
 
-        # diff = torch.log(ret['rgb']**2.2+eps)-torch.log(prev_ret['rgb']**2.2+eps)
-        diff = pred_img - pre_pred_img
 
+
+        # if self.is_colored:
+        #     self.color_mask[0::2, 0::2, 0] = 1  # r
+        #     self.color_mask[0::2, 1::2, 1] = 1  # g
+        #     self.color_mask[1::2, 0::2, 1] = 1  # g
+        #     self.color_mask[1::2, 1::2, 2] = 1  # b
+        # else:
+        #     self.color_mask[...] = 1
+
+
+        color_mask = color_mask.reshape((-1, 3))
+        color_mask = torch.from_numpy(color_mask).to(self.device)
+        # print(pred_img.size())
+
+        diff = torch.log(pred_img**2.2+1e-5)-torch.log(pre_pred_img**2.2+1e-5)
+
+        
+        diff = diff.reshape((-1, 3))
+        # print(diff.size(),color_mask.size())
+
+        # diff = pred_img - pre_pred_img
+        diff = diff * color_mask
+        diff = diff.reshape((H, W, 3))
         # diff = diff * color_mask
         event_mask = None
         THR = 0.5
