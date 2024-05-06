@@ -15,7 +15,6 @@
 """
 Abstracts for the Pipeline class.
 """
-from __future__ import annotations
 
 import typing
 from abc import abstractmethod
@@ -34,13 +33,27 @@ from torch.nn import Parameter
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from nerfstudio.configs.base_config import InstantiateConfig
-from nerfstudio.data.datamanagers.base_datamanager import DataManager, DataManagerConfig, VanillaDataManager
+# from nerfstudio.data.datamanagers.base_datamanager import DataManager, DataManagerConfig, VanillaDataManager
+from esplatfacto.data.base_datamanager import DataManager, DataManagerConfig, VanillaDataManager
+
 from nerfstudio.data.datamanagers.full_images_datamanager import FullImageDatamanager
 from nerfstudio.data.datamanagers.parallel_datamanager import ParallelDataManager
 from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import profiler
+from nerfstudio.configs import base_config as cfg
+from nerfstudio.models.base_model import ModelConfig
+from nerfstudio.pipelines.base_pipeline import (
+    VanillaPipeline,
+    VanillaPipelineConfig,
+)
 
+# from lerf.data.lerf_datamanager import (
+#     LERFDataManager,
+#     LERFDataManagerConfig,
+# )
+# from lerf.lerf import LERFModel, LERFModelConfig
+from esplatfacto.esplatfacto import ESplatfactoModel, ESplatfactoModelConfig
 
 def module_wrapper(ddp_or_model: Union[DDP, Model]) -> Model:
     """
@@ -208,16 +221,15 @@ class Pipeline(nn.Module):
             A list of dictionaries containing the pipeline's param groups.
         """
 
-
 @dataclass
-class EsplatPipelineConfig(InstantiateConfig):
+class EsplatPipelineConfig(VanillaPipelineConfig):
     """Configuration for pipeline instantiation"""
 
     _target: Type = field(default_factory=lambda: EsplatPipeline)
     """target class to instantiate"""
     datamanager: DataManagerConfig = field(default_factory=DataManagerConfig)
     """specifies the datamanager config"""
-    model: ModelConfig = field(default_factory=ModelConfig)
+    model: ModelConfig = ESplatfactoModelConfig()
     """specifies the model config"""
 
 
@@ -250,6 +262,7 @@ class EsplatPipeline(Pipeline):
         grad_scaler: Optional[GradScaler] = None,
     ):
         super().__init__()
+
         self.config = config
         self.test_mode = test_mode
         self.datamanager: DataManager = config.datamanager.setup(
@@ -280,7 +293,7 @@ class EsplatPipeline(Pipeline):
 
         self.world_size = world_size
         if world_size > 1:
-            self._model = typing.cast(Model, DDP(self._model, device_ids=[local_rank], find_unused_parameters=True))
+            self._model = typing.cast(ESplatfactoModel, DDP(self._model, device_ids=[local_rank], find_unused_parameters=True))
             dist.barrier(device_ids=[local_rank])
 
     @property
@@ -323,7 +336,7 @@ class EsplatPipeline(Pipeline):
         self.eval()
         ray_bundle, ray_bundle_pre, batch = self.datamanager.next_eval(step)
         model_outputs = self.model(ray_bundle)
-        model_outputs_pre = self.model(ray_bundle) # Inference img for last frame t0
+        model_outputs_pre = self.model(ray_bundle_pre) # Inference img for last frame t0
         metrics_dict = self.model.get_metrics_dict(model_outputs, model_outputs_pre, batch)
         loss_dict =    self.model.get_loss_dict(model_outputs, model_outputs_pre, batch, metrics_dict)
         self.train()

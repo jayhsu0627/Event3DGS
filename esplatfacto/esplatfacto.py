@@ -49,6 +49,14 @@ from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
 
+import colour
+from colour_demosaicing import (
+    ROOT_RESOURCES_EXAMPLES,
+    demosaicing_CFA_Bayer_bilinear,
+    demosaicing_CFA_Bayer_Malvar2004,
+    demosaicing_CFA_Bayer_Menon2007,
+    mosaicing_CFA_Bayer)
+
 TINY_NUMBER = 1e-6      # float32 only has 7 decimal digits precision
 
 
@@ -58,6 +66,13 @@ def img2mse(x, y, mask=None):
         return torch.mean((x - y) * (x - y))
     else:
         return torch.sum((x - y) * (x - y) * mask.unsqueeze(-1)) / (torch.sum(mask) * x.shape[-1] + TINY_NUMBER)
+
+def scale_img( array):
+    min_val = np.min(array)
+    max_val = np.max(array)
+    sf = 255 / (max_val - min_val)
+    scaled_array = ((array - min_val) * sf).astype(np.uint8)
+    return scaled_array
 
 def random_quat_tensor(N):
     """
@@ -108,11 +123,13 @@ class ESplatfactoModelConfig(ModelConfig):
     """Whether to randomize the background color."""
     num_downscales: int = 2
     """at the beginning, resolution is 1/2^d, where d is this number"""
-    cull_alpha_thresh: float = 0.1
+    # cull_alpha_thresh: float = 0.1
+    cull_alpha_thresh: float = 0.001
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 0.5
     """threshold of scale for culling huge gaussians"""
-    continue_cull_post_densification: bool = True
+    # continue_cull_post_densification: bool = True
+    continue_cull_post_densification: bool = False
     """If True, continue to cull gaussians post refinement"""
     reset_alpha_every: int = 30
     """Every this many refinement steps, reset the alpha"""
@@ -124,9 +141,11 @@ class ESplatfactoModelConfig(ModelConfig):
     """number of samples to split gaussians into"""
     sh_degree_interval: int = 1000
     """every n intervals turn on another sh degree"""
-    cull_screen_size: float = 0.15
+    # cull_screen_size: float = 0.15
+    cull_screen_size: float = 0.05
     """if a gaussian is more than this percent of screen space, cull it"""
-    split_screen_size: float = 0.05
+    # split_screen_size: float = 0.05
+    split_screen_size: float = 0.01
     """if a gaussian is more than this percent of screen space, split it"""
     stop_screen_size_at: int = 4000
     """stop culling/splitting at this step WRT screen size of gaussians"""
@@ -136,13 +155,14 @@ class ESplatfactoModelConfig(ModelConfig):
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 10.0
     "Size of the cube to initialize random gaussians within"
-    ssim_lambda: float = 0.2
+    ssim_lambda: float = 0.5
     """weight of ssim loss"""
     stop_split_at: int = 15000
     """stop splitting at this step"""
     sh_degree: int = 3
     """maximum degree of spherical harmonics to use"""
-    use_scale_regularization: bool = False
+    # use_scale_regularization: bool = False
+    use_scale_regularization: bool = True
     """If enabled, a scale regularization introduced in PhysGauss (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians."""
     max_gauss_ratio: float = 10.0
     """threshold of ratio of gaussian max to min scale before applying regularization
@@ -890,12 +910,6 @@ class ESplatfactoModel(Model):
         color_mask[1::2, 0::2, 1] = 1  # g
         color_mask[1::2, 1::2, 2] = 1  # b
 
-        # Ll1 = torch.abs(gt_img - pred_img).mean()
-
-        # simloss = 1 - self.ssim(gt_img.permute(2, 0, 1)[None, ...], pred_img.permute(2, 0, 1)[None, ...])
-
-
-
         # if self.is_colored:
         #     self.color_mask[0::2, 0::2, 0] = 1  # r
         #     self.color_mask[0::2, 1::2, 1] = 1  # g
@@ -904,24 +918,25 @@ class ESplatfactoModel(Model):
         # else:
         #     self.color_mask[...] = 1
 
-
         color_mask = color_mask.reshape((-1, 3))
         color_mask = torch.from_numpy(color_mask).to(self.device)
         # print(pred_img.size())
 
-        diff = torch.log(pred_img**2.2+1e-5)-torch.log(pre_pred_img**2.2+1e-5)
-
-        
-        diff = diff.reshape((-1, 3))
-        # print(diff.size(),color_mask.size())
-
+        # diff = torch.log(pred_img**2.2+1e-5)-torch.log(pre_pred_img**2.2+1e-5)  
+        diff = torch.log(pred_img+1e-5)/2.2-torch.log(pre_pred_img+1e-5)/2.2
         # diff = pred_img - pre_pred_img
-        diff = diff * color_mask
-        diff = diff.reshape((H, W, 3))
-        # diff = diff * color_mask
+
         event_mask = None
         THR = 0.5
+        THR = 1.0
         event_loss = img2mse(diff, gt_img*THR, event_mask)
+        
+        # Ll1 = torch.abs(gt_img - pred_img).mean()
+        # Ll1 = event_loss
+
+        Ll1 = torch.abs(gt_img*THR - diff).mean()
+
+        simloss = 1 - self.ssim((gt_img*THR).permute(2, 0, 1)[None, ...], diff.permute(2, 0, 1)[None, ...])
 
         if self.config.use_scale_regularization and self.step % 10 == 0:
             scale_exp = torch.exp(self.scales)
@@ -938,8 +953,8 @@ class ESplatfactoModel(Model):
         # print("event_loss:=====", event_loss)
         return {
 
-                    # "main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss,
-                    "main_loss": event_loss,
+                    "main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss,
+                    # "main_loss": event_loss,
 
                     "scale_reg": scale_reg,
 

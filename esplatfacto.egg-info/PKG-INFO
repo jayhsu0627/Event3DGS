@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: esplatfacto
-Version: 0.0.2
+Version: 0.0.3
 Requires-Dist: numpy
 Requires-Dist: gsplat==0.1.10
 Requires-Dist: imageio

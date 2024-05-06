@@ -58,7 +58,7 @@ class EventNerfstudioDataParserConfig(DataParserConfig):
     """How much to scale the camera origins by."""
     downscale_factor: Optional[int] = None
     """How much to downscale images. If not set, images are chosen such that the max dimension is <1600px."""
-    scene_scale: float = 1.0
+    scene_scale: float = 0.5
     """How much to scale the region of interest by."""
     orientation_method: Literal["pca", "up", "vertical", "none"] = "up"
     """The method to use for orientation."""
@@ -284,6 +284,7 @@ class Nerfstudio(DataParser):
             method=orientation_method,
             center_method=self.config.center_method,
         )
+
         # Scale pre_poses
         scale_factor = 1.0
         if self.config.auto_scale_poses:
