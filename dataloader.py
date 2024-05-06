@@ -599,5 +599,5 @@ eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data
 
 # eventData.events_collections['frame']
 eventData.convert_to_json()
-# eventData.convert_to_images()
-eventData.convert_to_images_uniform()
+eventData.convert_to_images()
+# eventData.convert_to_images_uniform()

@@ -313,6 +313,10 @@ class EsplatPipeline(Pipeline):
         ray_bundle, ray_bundle_pre, batch = self.datamanager.next_train(step)
         model_outputs = self._model(ray_bundle)  # train distributed data parallel model if world_size > 1
         model_outputs_pre = self._model(ray_bundle_pre)  # Inference img for last frame t0
+
+        # print("t:", ray_bundle)
+        # print("t0:", ray_bundle_pre)
+
         metrics_dict = self.model.get_metrics_dict(model_outputs, model_outputs_pre, batch)
         loss_dict =    self.model.get_loss_dict(model_outputs, model_outputs_pre, batch, metrics_dict)
 

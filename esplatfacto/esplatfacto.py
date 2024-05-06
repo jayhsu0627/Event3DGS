@@ -57,6 +57,8 @@ from colour_demosaicing import (
     demosaicing_CFA_Bayer_Menon2007,
     mosaicing_CFA_Bayer)
 
+import cv2 
+
 TINY_NUMBER = 1e-6      # float32 only has 7 decimal digits precision
 
 
@@ -892,6 +894,7 @@ class ESplatfactoModel(Model):
         gt_img = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
         pred_img = outputs["rgb"]
         pre_pred_img = outputs_pre["rgb"]
+        
         (H, W, _) = pre_pred_img.shape
         # Set masked part of both ground-truth and rendered image to black.
         # This is a little bit sketchy for the SSIM loss.
@@ -926,15 +929,22 @@ class ESplatfactoModel(Model):
         diff = torch.log(pred_img+1e-5)/2.2-torch.log(pre_pred_img+1e-5)/2.2
         # diff = pred_img - pre_pred_img
 
+        if self.step % 5000 == 1:
+            numpy_horizontal = np.hstack(((gt_img).cpu().detach().numpy(), (pred_img).cpu().detach().numpy()))
+            numpy_horizontal = np.hstack((numpy_horizontal, pre_pred_img.cpu().detach().numpy()))
+            numpy_horizontal = np.hstack((numpy_horizontal, diff.cpu().detach().numpy()))
+            cv2.imshow('pre_pred_img',numpy_horizontal)
+            cv2.waitKey(0)
+
         event_mask = None
         THR = 0.5
-        THR = 1.0
+        # THR = 1.0
         event_loss = img2mse(diff, gt_img*THR, event_mask)
         
         # Ll1 = torch.abs(gt_img - pred_img).mean()
-        # Ll1 = event_loss
+        Ll1 = event_loss
 
-        Ll1 = torch.abs(gt_img*THR - diff).mean()
+        # Ll1 = torch.abs(gt_img*THR - diff).mean()
 
         simloss = 1 - self.ssim((gt_img*THR).permute(2, 0, 1)[None, ...], diff.permute(2, 0, 1)[None, ...])
 

@@ -270,10 +270,10 @@ class Nerfstudio(DataParser):
         # num, m, n = poses.shape
 
         
-        pre_camera.append(frame["pre_camera"])
+        # pre_camera.append(frame["pre_camera"])
 
         for i in pre_camera:
-            pre_poses.append(np.array(frames[(i-1)]["transform_matrix"]))
+            pre_poses.append(np.array(frames[i]["transform_matrix"]))
             # pre_poses[i] = poses[i-1]
             # print(i-1)
             # pre_poses[(i-1)//100] = poses[(i-1)//100]
@@ -299,6 +299,8 @@ class Nerfstudio(DataParser):
         poses = poses[idx_tensor]
         pre_poses = pre_poses[idx_tensor]
         # print("after:",len(poses))
+        print(idx_tensor)
+        print(pre_camera)
 
         # in x,y,z order
         # assumes that the scene is centered at the origin
