@@ -393,8 +393,8 @@ class EventImageDatamanager:
                 self.bayer = self.scale_img(self.bayer)
             print(OUT_PATH, img_name)
 
-            # self.ImgSave( self.bayer, OUT_PATH, img_name)
-            self.ImgSave( self.img_gray, OUT_PATH, img_name)
+            self.ImgSave( self.bayer, OUT_PATH, img_name)
+            # self.ImgSave( self.img_gray, OUT_PATH, img_name)
 
             print(f"writing {OUT_PATH}")
 
@@ -580,13 +580,13 @@ class EventImageDatamanager:
 #     scaled_array = ((array - min_val) * sf).astype(np.uint8)
 #     return scaled_array
 
-events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\lego\\train\\events\\test_lego1_color_init159_1e-6eps.npz'
-eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\lego\\train\\pose",
-                                "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\lego", 346, 260, debayer_method="Menon2007", is_real=False, sigma=0)
+# events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\lego\\train\\events\\test_lego1_color_init159_1e-6eps.npz'
+# eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\lego\\train\\pose",
+#                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\lego", 346, 260, debayer_method="Menon2007", is_real=False, sigma=0)
 
-# events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\drums\\train\\events\\events.npz'
-# eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\drums\\train\\pose",
-#                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\drums", 346, 260, debayer_method="Menon2007", is_real=False, sigma=0)
+events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\drums\\train\\events\\events.npz'
+eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\drums\\train\\pose",
+                                "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\drums", 346, 260, debayer_method="Menon2007", is_real=False, sigma=0)
 
 
 # events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\real\\sewing\\train\\events\\b10_cal1_45rpm_gfox_eonly-2022_05_12_01_17_04_shift_ts1.npz'
@@ -599,5 +599,5 @@ eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data
 
 # eventData.events_collections['frame']
 eventData.convert_to_json()
-eventData.convert_to_images()
-# eventData.convert_to_images_uniform()
+# eventData.convert_to_images()
+eventData.convert_to_images_uniform()

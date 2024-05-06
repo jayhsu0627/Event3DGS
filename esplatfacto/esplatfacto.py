@@ -157,7 +157,7 @@ class ESplatfactoModelConfig(ModelConfig):
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 10.0
     "Size of the cube to initialize random gaussians within"
-    ssim_lambda: float = 0.2
+    ssim_lambda: float = 0.5
     """weight of ssim loss"""
     stop_split_at: int = 15000
     """stop splitting at this step"""
@@ -933,8 +933,11 @@ class ESplatfactoModel(Model):
             numpy_horizontal = np.hstack(((gt_img).cpu().detach().numpy(), (pred_img).cpu().detach().numpy()))
             numpy_horizontal = np.hstack((numpy_horizontal, pre_pred_img.cpu().detach().numpy()))
             numpy_horizontal = np.hstack((numpy_horizontal, diff.cpu().detach().numpy()))
-            cv2.imshow('pre_pred_img',numpy_horizontal)
-            cv2.waitKey(0)
+            # cv2.imshow('pre_pred_img',numpy_horizontal)
+            # cv2.waitKey(0)
+            numpy_horizontal*=255
+            filename = "C:\\Users\\sjxu\\Downloads\\drums_" + str(self.step) +".png"
+            cv2.imwrite(filename, cv2.cvtColor(numpy_horizontal, cv2.COLOR_RGB2BGR))
 
         event_mask = None
         THR = 0.5
