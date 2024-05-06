@@ -126,7 +126,7 @@ class ESplatfactoModelConfig(ModelConfig):
     num_downscales: int = 2
     """at the beginning, resolution is 1/2^d, where d is this number"""
     # cull_alpha_thresh: float = 0.1
-    cull_alpha_thresh: float = 0.001
+    cull_alpha_thresh: float = 0.005
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
     cull_scale_thresh: float = 0.5
     """threshold of scale for culling huge gaussians"""
@@ -157,7 +157,7 @@ class ESplatfactoModelConfig(ModelConfig):
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 10.0
     "Size of the cube to initialize random gaussians within"
-    ssim_lambda: float = 0.5
+    ssim_lambda: float = 0.15
     """weight of ssim loss"""
     stop_split_at: int = 15000
     """stop splitting at this step"""
