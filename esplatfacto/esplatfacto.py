@@ -143,11 +143,11 @@ class ESplatfactoModelConfig(ModelConfig):
     """number of samples to split gaussians into"""
     sh_degree_interval: int = 1000
     """every n intervals turn on another sh degree"""
-    # cull_screen_size: float = 0.15
-    cull_screen_size: float = 0.05
+    cull_screen_size: float = 0.15
+    # cull_screen_size: float = 0.07
     """if a gaussian is more than this percent of screen space, cull it"""
-    # split_screen_size: float = 0.05
-    split_screen_size: float = 0.01
+    split_screen_size: float = 0.05
+    # split_screen_size: float = 0.01
     """if a gaussian is more than this percent of screen space, split it"""
     stop_screen_size_at: int = 4000
     """stop culling/splitting at this step WRT screen size of gaussians"""
@@ -157,7 +157,7 @@ class ESplatfactoModelConfig(ModelConfig):
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 10.0
     "Size of the cube to initialize random gaussians within"
-    ssim_lambda: float = 0.15
+    ssim_lambda: float = 0.8
     """weight of ssim loss"""
     stop_split_at: int = 15000
     """stop splitting at this step"""
@@ -926,8 +926,8 @@ class ESplatfactoModel(Model):
         # print(pred_img.size())
 
         # diff = torch.log(pred_img**2.2+1e-5)-torch.log(pre_pred_img**2.2+1e-5)  
-        diff = torch.log(pred_img+1e-5)/2.2-torch.log(pre_pred_img+1e-5)/2.2
-        # diff = pred_img - pre_pred_img
+        # diff = torch.log(pred_img+1e-5)/2.2-torch.log(pre_pred_img+1e-5)/2.2
+        diff = pred_img - pre_pred_img
 
         if self.step % 5000 == 1:
             numpy_horizontal = np.hstack(((gt_img).cpu().detach().numpy(), (pred_img).cpu().detach().numpy()))
@@ -936,7 +936,7 @@ class ESplatfactoModel(Model):
             # cv2.imshow('pre_pred_img',numpy_horizontal)
             # cv2.waitKey(0)
             numpy_horizontal*=255
-            filename = "C:\\Users\\sjxu\\Downloads\\drums_" + str(self.step) +".png"
+            filename = "C:\\Users\\sjxu\\Downloads\\drums_new_" + str(self.step) +".png"
             cv2.imwrite(filename, cv2.cvtColor(numpy_horizontal, cv2.COLOR_RGB2BGR))
 
         event_mask = None
@@ -972,6 +972,37 @@ class ESplatfactoModel(Model):
                     "scale_reg": scale_reg,
 
                 }
+
+        # event_mask = None
+        # THR = 0.5
+        # # THR = 1.0
+
+        # Ll1 = torch.abs(gt_img*THR - diff).mean()
+        # simloss = 1 - self.ssim((gt_img*THR).permute(2, 0, 1)[None, ...], diff.permute(2, 0, 1)[None, ...])
+        # main_loss = (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss
+        # event_loss = img2mse(main_loss, gt_img*0, event_mask)
+        
+        # if self.config.use_scale_regularization and self.step % 10 == 0:
+        #     scale_exp = torch.exp(self.scales)
+        #     scale_reg = (
+        #         torch.maximum(
+        #             scale_exp.amax(dim=-1) / scale_exp.amin(dim=-1),
+        #             torch.tensor(self.config.max_gauss_ratio),
+        #         )
+        #         - self.config.max_gauss_ratio
+        #     )
+        #     scale_reg = 0.1 * scale_reg.mean()
+        # else:
+        #     scale_reg = torch.tensor(0.0).to(self.device)
+        # # print("event_loss:=====", event_loss)
+        # return {
+
+        #             "main_loss": event_loss,
+        #             # "main_loss": event_loss,
+
+        #             "scale_reg": scale_reg,
+
+        #         }
 
     @torch.no_grad()
     def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:

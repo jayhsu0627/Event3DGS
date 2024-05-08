@@ -584,14 +584,14 @@ class EventImageDatamanager:
 # eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\lego\\train\\pose",
 #                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\lego", 346, 260, debayer_method="Menon2007", is_real=False, sigma=0)
 
-events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\drums\\train\\events\\events.npz'
-eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\drums\\train\\pose",
-                                "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\drums", 346, 260, debayer_method="Menon2007", is_real=False, sigma=0)
+# events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\drums\\train\\events\\events.npz'
+# eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\drums\\train\\pose",
+#                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\drums", 346, 260, debayer_method="Menon2007", is_real=False, sigma=0)
 
 
-# events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\real\\sewing\\train\\events\\b10_cal1_45rpm_gfox_eonly-2022_05_12_01_17_04_shift_ts1.npz'
-# eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\real\\sewing\\train\\pose",
-#                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\sewing", 346, 260, debayer_method="Menon2007", is_real=True, sigma=0)
+events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\real\\sewing\\train\\events\\b10_cal1_45rpm_gfox_eonly-2022_05_12_01_17_04_shift_ts1.npz'
+eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\real\\sewing\\train\\pose",
+                                "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\sewing", 346, 260, debayer_method="Menon2007", is_real=True, sigma=0)
 
 # events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\real\\chick\\train\\events\\b10_cal1_45rpm_gfox_eonly-2022_05_12_00_53_10_shift_ts1.npz'
 # eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\real\\chick\\train\\pose",

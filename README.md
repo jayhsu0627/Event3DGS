@@ -48,6 +48,12 @@ TODO: edit `class ExportGaussianSplat(Exporter)` in `exporter.py`
     assert isinstance(pipeline.model, SplatfactoModel)
 AssertionError
 ```
+
+1. Split RGB channels independent 3dgs
+2. I'm now a pure 3dgs with no 159 assumption
+3. Add t0 and t estimation?
+4. 
+
 - 
 
 ```test
