@@ -1,6 +1,6 @@
 # ESplat: Event Camera 3D Gaussian Splatting
 This is the unofficial implementation for [Event3DGS: Event-based 3D Gaussian Splatting for High-Speed Robot Egomotion
-]([https://lerf.io](https://arxiv.org/abs/2406.02972)).
+(CoRL 2024)](https://arxiv.org/abs/2406.02972).
 
 
 <div align='center'> 
