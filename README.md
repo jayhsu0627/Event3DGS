@@ -1,9 +1,10 @@
 # ESplat: Event Camera 3D Gaussian Splatting
-This is the official implementation for [LERF](https://lerf.io).
+This is the unofficial implementation for [Event3DGS: Event-based 3D Gaussian Splatting for High-Speed Robot Egomotion
+]([https://lerf.io](https://arxiv.org/abs/2406.02972)).
 
 
 <div align='center'> 
-<img src="https://www.lerf.io/data/nerf_render.svg" height="230px">
+<img src="https://arxiv.org/html/2406.02972v3/x2.png" height="230px">
 </div>
 
 # Installation
@@ -106,6 +107,7 @@ We've designed the code to modularly accept any image encoder that implements th
 (TODO expand this section)
 The main file to look at for editing and building off LERF is `lerf.py`, which extends the Nerfacto model from Nerfstudio, adds an additional language field, losses, and visualization. The CLIP and DINO pre-processing are carried out by `pyramid_interpolator.py` and `dino_dataloader.py`. -->
 
+<!--
 ## Bibtex
 If you find this useful, please cite the paper!
 <pre id="codecell0">@inproceedings{lerf2023,
@@ -113,4 +115,4 @@ If you find this useful, please cite the paper!
 &nbsp;title = {LERF: Language Embedded Radiance Fields},
 &nbsp;booktitle = {International Conference on Computer Vision (ICCV)},
 &nbsp;year = {2023},
-} </pre>
+} </pre> -->
