@@ -15,18 +15,29 @@ We prepare this repo based on [nerfstudio](https://docs.nerf.studio/) and [Event
 </div>
 
 # Installation
-ESplat follows the integration guidelines described [here](https://docs.nerf.studio/en/latest/developer_guides/new_methods.html) for custom methods within Nerfstudio. Update to `nerfstudio==1.0.3`.
+ESplat follows the integration guidelines described [here](https://docs.nerf.studio/developer_guides/new_methods.html) for custom methods within Nerfstudio. Update to `nerfstudio==1.0.3`.
 
-### 0. Install Nerfstudio dependencies
-[Follow these instructions](https://docs.nerf.studio/en/latest/quickstart/installation.html) up to and including "tinycudann" to install dependencies and create an environment
+<!-- ### 0. Install Nerfstudio dependencies
+[Follow these instructions](https://docs.nerf.studio/en/latest/quickstart/installation.html) up to and including "tinycudann" to install dependencies and create an environment -->
 
 ### 1. Clone this repo
+Give a star before you clone this repo please. <a class="github-button" href="https://github.com/jayhsu0627/Event3DGS" data-color-scheme="no-preference: light; light: light; dark: dark;" data-icon="octicon-star" data-size="large" aria-label="Star jayhsu0627/Event3DGS on GitHub">Star</a>
+
+
 `git clone https://github.com/jayhsu0627/Event3DGS`
 
-### 2. Install this repo as a python package
+### 2. Install conda env
+
+```
+conda env create -f environment.yml
+```
+
+### 3. Install this repo as a python package
 Navigate to this folder and run `python -m pip install -e .`
 
-### 3. Reinstall gsplat to avoid this [issue](https://github.com/nerfstudio-project/nerfstudio/issues/2727)
+### 4. Reinstall gsplat to avoid this [issue](https://github.com/nerfstudio-project/nerfstudio/issues/2727)
+Please check your gsplat version by `conda list` before you do this step.
+
 `pip install git+https://github.com/nerfstudio-project/gsplat.git@v0.1.10`
 <!-- ### 4. Run `ns-install-cli` -->
 
@@ -68,7 +79,7 @@ python dataloader.py -p data/ -s lego
 | ![Image 1](./img/data/r_00000.png)    | ![Image 2](./img/data/r_00001.png)    |
 ## Train
 
-- Launch training with `ns-train esplatfacto --data <data_folder>`. This specifies a data folder to use. For more details, see [Nerfstudio documentation](https://docs.nerf.studio/en/latest/quickstart/first_nerf.html). 
+- Launch training with `ns-train esplatfacto --data <data_folder>`. This specifies a data folder to use. For more details, see [Nerfstudio documentation](https://docs.nerf.studio/quickstart/first_nerf.html). 
 
 ```
 ns-train esplatfacto --data data/lego/output
