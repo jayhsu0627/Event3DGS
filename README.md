@@ -104,9 +104,11 @@ AssertionError
 
 - [ ] You may discover our result looks floatering compare to the result from papers. **This repo only contains a pure 3DGS implementation**, it's not the same as the CoRL 2024 paper or the EventNeRF paper. The ignored assumption include: (a) no Density Clipping as mentioned in A.2 of EventNeRF paper (b) no or wrong negative sampling
 
-<div align='center'>
-  <img src="./img/density_clipping.png" height="300px">
-  <figcaption>Density Clipping from EventNeRF paper</figcaption>
+<div align="center">
+  <figure>
+    <img src="./img/density_clipping.png" height="300px">
+    <figcaption style="text-align: center;">Density Clipping from EventNeRF paper</figcaption>
+  </figure>
 </div>
 
 - [ ] We can split RGB channels as independent 3DGS.
