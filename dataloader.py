@@ -14,6 +14,7 @@ from colour_demosaicing import (
     demosaicing_CFA_Bayer_Malvar2004,
     demosaicing_CFA_Bayer_Menon2007,
     mosaicing_CFA_Bayer)
+import argparse
 
 num_events = 53644
 
@@ -588,16 +589,50 @@ class EventImageDatamanager:
 # eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\drums\\train\\pose",
 #                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\drums", 346, 260, debayer_method="Menon2007", is_real=False, sigma=0)
 
-
-events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\real\\sewing\\train\\events\\b10_cal1_45rpm_gfox_eonly-2022_05_12_01_17_04_shift_ts1.npz'
-eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\real\\sewing\\train\\pose",
-                                "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\sewing", 346, 260, debayer_method="Menon2007", is_real=True, sigma=0)
-
 # events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\real\\chick\\train\\events\\b10_cal1_45rpm_gfox_eonly-2022_05_12_00_53_10_shift_ts1.npz'
 # eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\real\\chick\\train\\pose",
 #                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\chick", 346, 260, debayer_method="Menon2007", is_real=False, sigma=0)
 
 # eventData.events_collections['frame']
-eventData.convert_to_json()
 # eventData.convert_to_images()
-eventData.convert_to_images_uniform()
+
+def find_npz_files(directory):
+    npz_files = []
+    try:
+        for root, dirs, filenames in os.walk(directory):
+            for filename in filenames:
+                if filename.endswith('.npz'):
+                    print("Found event data:", filename)
+                    npz_files.append(os.path.join(root, filename))
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    return npz_files
+
+
+def main(args):
+    print(f'Start processing {args.root_path}')
+
+    events_path = os.path.join(args.root_path, args.scene)
+    pose_path = os.path.join(args.root_path, args.scene, "pose")
+    out_path = os.path.join(args.root_path, args.scene, "output")
+    print("Events_path:", events_path)
+    npz_file = find_npz_files(events_path)[0]
+    eventData = EventImageDatamanager(npz_file, pose_path,
+                                    out_path, 346, 260, debayer_method="Menon2007", is_real=True, sigma=0)
+    eventData.convert_to_json()
+    eventData.convert_to_images_uniform()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='A simple argument parser example.')
+
+    parser.add_argument('-H', '--height', type=int, default=346, help='height.')
+    parser.add_argument('-W', '--width', type=int, default=260, help='width.')
+    parser.add_argument('-p', '--root_path', type=str, default=r'C:\Users\sjxu\3_Event_3DGS\Event3DGS\Data', help='Path to root directory.')
+    parser.add_argument('-s', '--scene', type=str, default='sewing', help='Scene name.')
+
+    args = parser.parse_args()
+    main(args)
+
+
+    
