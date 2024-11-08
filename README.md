@@ -21,7 +21,9 @@ ESplat follows the integration guidelines described [here](https://docs.nerf.stu
 [Follow these instructions](https://docs.nerf.studio/en/latest/quickstart/installation.html) up to and including "tinycudann" to install dependencies and create an environment -->
 
 ### 1. Clone this repo
-Give a star before you clone this repo please. <a class="github-button" href="https://github.com/jayhsu0627/Event3DGS" data-color-scheme="no-preference: light; light: light; dark: dark;" data-icon="octicon-star" data-size="large" aria-label="Star jayhsu0627/Event3DGS on GitHub">Star</a>
+Give a star before you clone this repo please. [![Star on GitHub](https://img.shields.io/github/stars/jonsn0w/hyde.svg?style=social)](https://github.com/jayhsu0627/Event3DGS/stargazers)
+
+
 
 
 `git clone https://github.com/jayhsu0627/Event3DGS`
