@@ -1,638 +1,232 @@
-import os
-import numpy as np
-from matplotlib import pyplot as plt
-import math
-import json
-import cv2
-import imageio
-import bm4d
-import os
-import colour
-from colour_demosaicing import (
-    ROOT_RESOURCES_EXAMPLES,
-    demosaicing_CFA_Bayer_bilinear,
-    demosaicing_CFA_Bayer_Malvar2004,
-    demosaicing_CFA_Bayer_Menon2007,
-    mosaicing_CFA_Bayer)
+"""Pre-process EventNeRF-style event data into a nerfstudio dataset folder.
+
+    python dataloader.py -p data/ -s lego                 # synthetic (auto-detected)
+    python dataloader.py -p data/ -s sewing --polarity-offset -0.375
+
+Writes ``data/<scene>/output/``:
+
+* ``transforms.json``: intrinsics, one camera pose per frame, and an ``events`` block
+  (path to the raw event file, event threshold, polarity offset, window size, scene bound...).
+* ``images/r_xxxxx.png``: previews of event windows. They are only used as viewer thumbnails;
+  they are *not* training targets.
+
+Training targets are accumulated from the raw event stream on the fly
+(see ``esplatfacto/data/esplatfacto_datamanager.py``), so every iteration sees a freshly sampled
+window, and the signed event counts are never rescaled.
+
+Coordinate frame: EventNeRF poses are OpenCV camera-to-world matrices in a world frame whose
++y axis points *down*. We convert the camera axes to the OpenGL convention used by nerfstudio and
+rotate the world so that +z points up. No re-centering or re-scaling is applied, so the scene bound
+(``events.bound``) is expressed in the same units as EventNeRF's ``crop_r`` / ``crop_y_*``.
+"""
 import argparse
+import glob
+import json
+import os
 
-num_events = 53644
+import numpy as np
+from PIL import Image
 
-class EventImageDatamanager:
+SENSOR_W, SENSOR_H = 346, 260  # DAVIS 346C
+
+# Values follow the EventNeRF configs (configs/nerf/*.txt and configs/real/*.txt).
+PRESETS = {
+    "synthetic": dict(focal=480.55, event_threshold=0.25, max_winsize=50, tonemap_eps=0.1),
+    "real": dict(focal=389.25, event_threshold=0.1, max_winsize=100, tonemap_eps=1e-5),
+}
+# EventNeRF's density-clipping cylinder for its real recordings (crop_r, crop_y_min, crop_y_max),
+# converted to our z-up frame (z = -y_eventnerf).
+EVENTNERF_REAL_BOUND = dict(radius=0.25, z_min=-0.15, z_max=0.35)
+
+# OpenCV camera axes -> OpenGL camera axes, and EventNeRF world (y down) -> z-up world.
+CV_TO_GL = np.diag([1.0, -1.0, -1.0, 1.0])
+WORLD_YDOWN_TO_ZUP = np.array([[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]], dtype=np.float64)
+
+
+def load_events(path):
+    data = np.load(path)
+    x, y, t, p = (np.asarray(data[k]) for k in ("x", "y", "t", "p"))
+    if np.any(np.diff(t) < 0):
+        order = np.argsort(t, kind="stable")
+        x, y, t, p = x[order], y[order], t[order], p[order]
+    p = p.astype(np.float32)
+    if set(np.unique(p).tolist()) <= {0.0, 1.0}:
+        p = p * 2 - 1
+    return x.astype(np.int64), y.astype(np.int64), t.astype(np.float64), p
+
+
+def load_poses(pose_dir):
+    files = sorted(glob.glob(os.path.join(pose_dir, "*.txt")))
+    if not files:
+        raise FileNotFoundError(f"No pose files in {pose_dir}")
+    return np.stack([np.loadtxt(f).reshape(4, 4) for f in files]), files
+
+
+def frame_times(t, n_frames):
+    """EventNeRF convention: pose k is taken at time k / (n_frames - 1) * t_max."""
+    return np.linspace(0.0, float(t.max()), n_frames)
+
+
+def window_counts(events, times, start, end):
+    """Per-pixel (signed sum, event count) of the events in (times[start], times[end]]."""
+    x, y, t, p = events
+    lo, hi = np.searchsorted(t, [times[start], times[end]], side="right")
+    idx = y[lo:hi] * SENSOR_W + x[lo:hi]
+    signed = np.bincount(idx, weights=p[lo:hi], minlength=SENSOR_W * SENSOR_H).reshape(SENSOR_H, SENSOR_W)
+    count = np.bincount(idx, minlength=SENSOR_W * SENSOR_H).reshape(SENSOR_H, SENSOR_W)
+    return signed, count
+
+
+def estimate_bound(events, times, poses_cv, focal, n_views=72, half_window=10, margin=0.1, grid=96):
+    """Conservative visual hull from event activity -> bounding cylinder (z-up frame).
+
+    For a static object on a uniform background, events only fire on the object. For each of
+    ``n_views`` views we take the convex hull of event-active pixels (after removing isolated
+    noise pixels), and keep the 3D grid points that project inside that hull in >= 95% of the
+    views that see them. The convex hull can only over-estimate the silhouette, so this never
+    carves away real geometry; it just removes the empty space where floaters live.
     """
-    A datamanager that outputs full images and cameras instead of raybundles.
-    This makes the datamanager more lightweight since we don't have to do generate rays.
-    Useful for full-image training e.g. rasterization pipelines.
-    deblur_method = ["bilinear", "Malvar2004", "Menon2007"]
-    The BM4D is the deblur stage, which take quite a long time. Default is off, but it can significantly
-    improve synthetic datasets.
-    """
-    def __init__(self, event_file_path, pose_directory, out_directory, width, height, debayer_method=None, is_real= False , sigma=0):
-        self.img_size = (height, width)
-        self.debayer = False
-        self.is_real = is_real # Real or Synthetic data
-        self.cycle = True
-        if self.is_real: self.cycle, self.max_winsize = True, 100
-        else: self.max_winsize = 50
-        self.randomize_winlen = True
-        self.events_collections = {}
-        self.files = []
-        self.idx = []
-        self.idx_pre = []
-        self.frame = []
-        self.frame_pre  = []
-
-        # self.img = np.zeros(self.img_size, dtype=np.int8)
-        self.event_file_path = event_file_path
-        self.pose_directory = pose_directory
-        self.out_directory = out_directory
-        self.F = np.array([[[1, 0, 0], [0, 1, 0]], [[0, 1, 0], [0, 0, 1]]])
-        self.F_tile = np.tile(self.F, (int(height/2), int(width/2), 1))
-        self.debayer_method = debayer_method
-        self.deblur = False
-
-        if sigma>0:
-            self.deblur = True
-            self.sigma = sigma
-        self.getEventData()
-
-        # Check if the directory exists, create it if it doesn't
-        if not os.path.exists(self.out_directory):
-            os.makedirs(self.out_directory)
-
-    def loadEventNPZData(self):
-        """Idx: Store the event line of the timestep for each output frames. range from [0-999]
-           Usage: idx[t_i-1] to idx[t_i] capture events motion image.
-                   0         to idx[t_i] capture RGB image
-        """
-        self.event_data = np.load(self.event_file_path)
-        self.timestamp, self.x, self.y, self.pol = self.event_data['t'], self.event_data['x'], self.event_data['y'], self.event_data['p']
-        print("Data length:", len(self.timestamp))
-
-        self.get_Event_Pair()
-
-        # print("idx: ", self.idx)
-        # print("pre_idx: ", self.idx_pre)
-        print("events_collections: ")
-        for key in self.events_collections:
-            print(key)
-            print(self.events_collections[key])
-
-    def loadEventTXTData(self):
-        self.event_data = np.loadtxt(self.event_file_path,dtype={'formats': ('f4', 'i4', 'i4', 'i4')})
-        # print(self.event_data)
-        # print(self.event_data.shape)
-        self.timestamp, self.x, self.y, self.pol = self.event_data[:,0], self.event_data[:,1], self.event_data[:,2], self.event_data[:,3]
-
-        print("Data length:", len(self.timestamp))
-        self.get_Event_Pair()
-
-        # print("idx: ", self.idx)
-        # print("pre_idx: ", self.idx_pre)
-        print("events_collections: ")
-        for key in self.events_collections:
-            print(key)
-            print(self.events_collections[key])
-
-    def get_Event_Pair(self):
-        max_winsize = self.max_winsize
-        start_range = 0 if self.cycle else 1+max_winsize
-        j=0
-        t = self.timestamp[0]
-        frame = 0
-        for j in range(107500):
-            if self.timestamp[j]>t:
-                print("Data shutter:", j)
-                break
-        start_pt = 0
-        for k in range(start_pt,len(self.timestamp)):
-            if self.timestamp[k]>t:
-                # print('Data streams per frame:',k-start_pt,t)
-                start_pt = k
-                t+= (self.timestamp[-1] - self.timestamp[0])/1000
-                self.files.append(k-1)
-                continue
-
-        # self.events_collections["idx"] = self.idx
-        
-        self.events_collections["events"] = []
-
-        # Calculate start and end streams and load events
-
-        for i in range(start_range, len(self.files)):
-            if self.randomize_winlen:
-                winsize = np.random.randint(1, max_winsize+1)
-            else:
-                winsize = max_winsize
-
-            # what is -1 for? for i=last frame covering all events
-            start_time = (i-winsize)/(len(self.files)-1)
-            if start_time < 0:
-                start_time += 1
-            end_time = (i)/(len(self.files)-1)
-
-            # Ending Streams lines
-            end = np.searchsorted(self.timestamp, end_time * self.timestamp.max())
-
-            # if win_constant_count != 0:
-            #     # TODO: there could be a bug with windows in the start, e.g., end-win_constant_count<0
-            #     #       please, check if the windows are correctly composed in that case
-            #     start_time = self.timestamp[end-win_constant_count]/self.timestamp.max()
-
-            #     if win_constant_count > end:
-            #         start_time = start_time - 1
-
-            #     winsize = int(i-start_time*(len(self.files)-1))
-            #     assert(winsize>0)
-            #     start_time = (i-winsize)/(len(self.files)-1)
-
-            #     if start_time < 0:
-            #         start_time += 1
-
-            # Find Start Streams lines
-            start = np.searchsorted(self.timestamp, start_time * self.timestamp.max())
-            # print(start, end, end-start)
-            if start <= end:
-                # normal case: take the interval between
-                events = (self.x[start:end], self.y[start:end], self.timestamp[start:end], self.pol[start:end])
-            else:
-                # loop over case: compose tail with head events
-                events = (np.concatenate((self.x[start:], self.x[:end])),
-                        np.concatenate((self.y[start:], self.y[:end])),
-                        np.concatenate((self.timestamp[start:], self.timestamp[:end])),
-                        np.concatenate((self.pol[start:], self.pol[:end])),
-                        )
-            # print(events)
-
-            # print(start_time, end_time, start, end, (i-winsize+len(self.files))%len(self.files), i )
-            # Corresponding stream number of t0
-            self.idx_pre.append(start)
-            # Corresponding stream number of t
-            self.idx.append(end)
-            # t0 frame: for example 3 (uniform pick from 0-100)
-            self.frame_pre.append((i-winsize+len(self.files))%len(self.files))
-            # t frame: for example 100
-            self.frame.append(i)
-            self.events_collections["events"].append(events)
-
-        self.events_collections["idx_pre"] = self.idx_pre
-        self.events_collections["idx"] = self.idx
-        self.events_collections["frame_pre"] = self.frame_pre
-        self.events_collections["frame"] = self.frame
-        
-        return self.events_collections
-
-    def getFileType(self):
-        root, ext = os.path.splitext(self.event_file_path)
-        return ext
-
-    def getEventData(self):
-        if self.getFileType() == ".txt":
-            print("Loaded txt")
-            self.loadEventTXTData()
-
-        if self.getFileType() == ".npz":
-            print("Loaded npz")
-            self.loadEventNPZData()
-
-    def scale_img(self, array):
-        min_val = np.min(array)
-        max_val = np.max(array)
-        sf = 255 / (max_val - min_val)
-        scaled_array = ((array - min_val) * sf).astype(np.uint8)
-        return scaled_array
-
-    def convertCameraImg(self, num_events, start=0):
-        # print("before:", np.max(img), np.min(img))
-        # self.img = np.zeros(self.img_size , dtype=np.float32)
-        # self.img = np.zeros(self.img_size , dtype=np.float32) + np.log(125) / 2.2
-        self.img = np.zeros(self.img_size , dtype=np.float32) + np.log(127) / 2.2
-        self.bayer = np.zeros(self.img_size, np.float32)
-        start = start
-
-        # print(self.img[:5,:5])
-
-        print("Load event img at :", num_events)
-        self.t_ref = self.timestamp[0] # time of the last event in the packet
-        self.tau = 0.03 # decay parameter (in seconds)
-        self.dt = num_events*10
-
-        for i in range(start, num_events):
-            self.img[self.y[i], self.x[i]] += self.pol[i]
-
-        bg_mask = self.img == np.log(127) / 2.2
-
-        self.img = np.tile(self.img[..., None], (1, 1, 3))
-        # img = np.tile(img[..., None], (1, 1, 3)) + np.log(159) / 2.2
-
-        print(self.img[:2,:2])
-        print("1. Before:", np.max(self.img), np.min(self.img), self.img.shape)
-
-        self.bayer = self.scale_img(self.img)
-
-        # Apply mask
-        # self.bayer[bg_mask] = 198
-
-        self.img_gray = self.bayer
-        self.bayer = self.F_tile * self.img_gray
-        print("bayer input", np.max(self.bayer), np.min(self.bayer))
-        self.bayer = np.clip(np.exp(self.bayer * 2.2), 0, 255).astype(np.uint8)
-
-        if self.debayer_method:
-            # mosaic
-            self.CFA = mosaicing_CFA_Bayer(self.img_gray)
-            print('here')
-            # Menon2007
-            if self.debayer_method == "bilinear":
-                self.bayer = demosaicing_CFA_Bayer_bilinear(self.CFA)
-            if self.debayer_method == "Malvar2004":
-                self.bayer = demosaicing_CFA_Bayer_Malvar2004(self.CFA)
-            if self.debayer_method == "Menon2007":
-                self.bayer = demosaicing_CFA_Bayer_Menon2007(self.CFA)
-            self.bayer = self.scale_img(self.bayer)
-            print("debayer_method", np.max(self.bayer), np.min(self.bayer))
-
-        if self.deblur:
-            self.bayer = bm4d.bm4d(self.bayer, self.sigma); # white noise: include noise std
-            self.bayer = self.scale_img(self.bayer)
-
-        # # Set background color for RGB
-        # self.bayer[bg_mask] = 125
-
-        # # Apply mask
-        # self.bayer[bg_mask] = 198
-        # self.bayer = np.clip(np.exp(self.bayer * 2.2), 0, 255).astype(np.uint8)
-        # self.bayer = np.exp(self.bayer * 2.2)
-
-        print(self.bayer[:2,:2])
-        print("2. After:", np.max(self.bayer), np.min(self.bayer), self.bayer.shape)
-
-        return self.img_gray, self.bayer
-
-    def AccuDiffCameraImg(self, t_0, t):
-        """ Eq.3 the observed events {Ei}_{i=1}^N between rendered views (multiplied by Bayer colour filter)
-        taken at two different time instants t0 and t. (t - t_0).
-        """
-        return self.convertCameraImg(t, t_0)
-
-    def ImgPlot(self, img):
-        fig = plt.figure(figsize=(21,6))
-        plt.subplot(1,4,1)
-        plt.imshow(img[:,:,0], clim=(0, 255))
-        plt.subplot(1,4,2)
-        plt.imshow(img[:,:,1], clim=(0, 255))
-        plt.subplot(1,4,3)
-        plt.imshow(img[:,:,2], clim=(0, 255))
-        plt.subplot(1,4,4)
-        plt.imshow(img, clim=(0, 255))
-        plt.show()
-
-    def ImgSave(self, img, file_path, file_name):
-        # Save the image to a PNG file
-        imageio.imwrite(file_path + '/' + str(file_name) +'.png', img)
-
-    def convert_to_images(self):
-        """nerfstudio style/format
-        """
-        OUT_PATH = os.path.normpath(self.out_directory + '/' + "images" + "/")
-        # Check if the directory exists, create it if it doesn't
-        if not os.path.exists(OUT_PATH):
-            os.makedirs(OUT_PATH)
-        # Loop all the images
-        frame = 0
-        self.img = np.zeros(self.img_size , dtype=np.float32) + np.log(127) / 2.2
-        self.bayer = np.zeros(self.img_size, np.float32)
-        num_events = len(self.timestamp)
-        
-        # if not self.is_real:
-
-        start = 0
-        while frame < len(self.files)-1:
-            for i in range(start, num_events-1):
-                img_name = str(f"r_{'{:05d}'.format(frame)}")
-                self.img[self.y[i], self.x[i]] += self.pol[i]
-                # If the event frame reach the camera frame, trigger save
-                if frame == len(self.files): break
-                if i == self.idx[frame]:
-                    print(i, frame,self.idx[frame])
-                    frame += 1
-                    bg_mask = self.img == np.log(127) / 2.2
-                    self.img_temp = np.tile(self.img[..., None], (1, 1, 3))
-                    self.bayer = self.scale_img(self.img_temp)
-
-                    self.img_gray = self.bayer
-                    self.bayer = self.F_tile * self.img_gray
-                    self.bayer = np.clip(np.exp(self.bayer * 2.2), 0, 255).astype(np.uint8)
-
-                    if self.debayer_method:
-                        # mosaic
-                        self.CFA = mosaicing_CFA_Bayer(self.img_gray)
-                        # Menon2007
-                        if self.debayer_method == "bilinear":
-                            self.bayer = demosaicing_CFA_Bayer_bilinear(self.CFA)
-                        if self.debayer_method == "Malvar2004":
-                            self.bayer = demosaicing_CFA_Bayer_Malvar2004(self.CFA)
-                        if self.debayer_method == "Menon2007":
-                            self.bayer = demosaicing_CFA_Bayer_Menon2007(self.CFA)
-                        self.bayer = self.scale_img(self.bayer)
-
-                    if self.deblur:
-                        self.bayer = bm4d.bm4d(self.bayer, self.sigma); # white noise: include noise std
-                        self.bayer = self.scale_img(self.bayer)
-                    print(OUT_PATH, img_name)
-
-                    self.ImgSave( self.bayer, OUT_PATH, img_name)
-
-    def convert_to_images_uniform(self):
-        """nerfstudio style/format; Use the uniform selected previous frame stroed in self.events_collections
-            Designed for real event camera data.
-        """
-        OUT_PATH = os.path.normpath(self.out_directory + '/' + "images" + "/")
-        # Check if the directory exists, create it if it doesn't
-        if not os.path.exists(OUT_PATH):
-            os.makedirs(OUT_PATH)
-        
-        # if not self.is_real:
-
-        start = 0
-        for frame in self.events_collections["frame"]:
-            print(frame, self.events_collections["idx_pre"][frame], self.events_collections["idx"][frame])
-            temp_event = self.events_collections["events"][frame]
-            # print(temp_event)
-            print(temp_event[0].shape)
-            curr_x, curr_y, _, curr_pol = temp_event[0], temp_event[1], temp_event[2], temp_event[3]
-            self.img = np.zeros(self.img_size , dtype=np.float32) + np.log(127) / 2.2
-            self.bayer = np.zeros(self.img_size, np.float32)
-
-            for i in range(0, len(curr_x)):
-                img_name = str(f"r_{'{:05d}'.format(frame)}")
-                self.img[curr_y[i], curr_x[i]] += curr_pol[i]
-
-            print(frame, img_name)
-            bg_mask = self.img == np.log(127) / 2.2
-            self.img_temp = np.tile(self.img[..., None], (1, 1, 3))
-            self.bayer = self.scale_img(self.img_temp)
-
-            self.img_gray = self.bayer
-            self.bayer = self.F_tile * self.img_gray
-            self.bayer = np.clip(np.exp(self.bayer * 2.2), 0, 255).astype(np.uint8)
-
-            if self.debayer_method:
-                # mosaic
-                self.CFA = mosaicing_CFA_Bayer(self.img_gray)
-                # Menon2007
-                if self.debayer_method == "bilinear":
-                    self.bayer = demosaicing_CFA_Bayer_bilinear(self.CFA)
-                if self.debayer_method == "Malvar2004":
-                    self.bayer = demosaicing_CFA_Bayer_Malvar2004(self.CFA)
-                if self.debayer_method == "Menon2007":
-                    self.bayer = demosaicing_CFA_Bayer_Menon2007(self.CFA)
-                self.bayer = self.scale_img(self.bayer)
-
-            if self.deblur:
-                self.bayer = bm4d.bm4d(self.bayer, self.sigma); # white noise: include noise std
-                self.bayer = self.scale_img(self.bayer)
-            print(OUT_PATH, img_name)
-
-            self.ImgSave( self.bayer, OUT_PATH, img_name)
-            # self.ImgSave( self.img_gray, OUT_PATH, img_name)
-
-            print(f"writing {OUT_PATH}")
-
-    def PoseRead(self, file_path, frame_num):
-        file_path = os.path.join(file_path, 'r_'+'{:05d}'.format(frame_num) + ".txt")
-        try:
-            with open(file_path, 'r') as file:
-                # Read each line in the file
-                lines = file.readlines()
-                # Parse each line to extract the elements of the camera matrix
-                camera_matrix = []
-                for line in lines:
-                    elements = line.split()
-                    camera_matrix.append([float(element) for element in elements])
-                camera_matrix = np.array(camera_matrix)
-                # print("test:", camera_matrix)
-                return camera_matrix
-
-        except FileNotFoundError:
-            print(f"Error: File '{file_path}' not found.")
-            return None
-        except Exception as e:
-            print(f"Error: {e}")
-            return None
-
-    def rotmat(self, a, b):
-        a, b = a / np.linalg.norm(a), b / np.linalg.norm(b)
-        v = np.cross(a, b)
-        c = np.dot(a, b)
-        s = np.linalg.norm(v)
-        kmat = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
-        return np.eye(3) + kmat + kmat.dot(kmat) * ((1 - c) / (s ** 2 + 1e-10))
-
-    def closest_point_2_lines(self, oa, da, ob, db): # returns point closest to both rays of form o+t*d, and a weight factor that goes to 0 if the lines are parallel
-        da = da / np.linalg.norm(da)
-        db = db / np.linalg.norm(db)
-        c = np.cross(da, db)
-        denom = np.linalg.norm(c)**2
-        t = ob - oa
-        ta = np.linalg.det([t, db, c]) / (denom + 1e-10)
-        tb = np.linalg.det([t, da, c]) / (denom + 1e-10)
-        if ta > 0:
-            ta = 0
-        if tb > 0:
-            tb = 0
-        return (oa+ta*da+ob+tb*db) * 0.5, denom
-
-    def convert_to_json(self):
-        """nerfstudio style/format
-        """
-        AABB_SCALE = 1
-        text = os.path.normpath(self.pose_directory) # + '/text')
-        OUT_PATH = os.path.normpath(self.out_directory + '/' + "transforms.json")
-        # sparce = os.path.normpath(args.scenedir + '/sparse')
-
-        # 1 SIMPLE_RADIAL 2048 1536 1580.46 1024 768 0.0045691
-        # 1 OPENCV 3840 2160 3178.27 3182.09 1920 1080 0.159668 -0.231286 -0.00123982 0.00272224
-        # 1 RADIAL 1920 1080 1665.1 960 540 0.0672856 -0.0761443
-
-        w = self.img_size[1]
-        h = self.img_size[0]
-        fl_x = 389.25 if self.is_real else 480.55
-        fl_y = 389.25 if self.is_real else 480.55
-        k1 = 0
-        k2 = 0
-        p1 = 0
-        p2 = 0
-        cx = w / 2
-        cy = h / 2
-
-        # angle_x = math.atan(w / (fl_x * 2)) * 2
-        # angle_y = math.atan(h / (fl_y * 2)) * 2
-        # fovx = angle_x * 180 / math.pi
-        # fovy = angle_y * 180 / math.pi
-
-        # with open(os.path.join(text,"images.txt"), "r") as f:
-        bottom = np.array([0.0, 0.0, 0.0, 1.0]).reshape([1, 4])
-        out = {
-            # "camera_angle_x": angle_x,
-            # "camera_angle_y": angle_y,
-            "fl_x": fl_x,
-            "fl_y": fl_y,
-            "cx": cx,
-            "cy": cy,
-            "w": w,
-            "h": h,
-            "camera_model": "OPENCV",
-            "k1": k1,
-            "k2": k2,
-            "p1": p1,
-            "p2": p2,
-            # "aabb_scale": AABB_SCALE,
-            "frames": [],
-        }
-
-        up = np.zeros(3)
-
-        for i in range(len(self.files)):
-            if  i % 1 == 0:
-                # elems=line.split(" ") # 1-4 is quat, 5-7 is trans, 9ff is filename (9, if filename contains no spaces)
-                pose_path = self.pose_directory
-                name = str(f"./images/r_{'{:05d}'.format(i)}.png")
-                print(name)
-                # b=sharpness(os.path.normpath(f"{args.scenedir}/{args.images}/{elems[9]}"))
-                # image_id = int(elems[0])
-
-                # qvec = np.array(tuple(map(float, elems[1:5])))
-                # tvec = np.array(tuple(map(float, elems[5:8])))
-                # R = qvec2rotmat(-qvec)
-                # t = tvec.reshape([3,1])
-                # m = np.concatenate([np.concatenate([R, t], 1), bottom], 0)
-
-                # m = self.PoseRead(pose_path, i)
-                # c2w = np.linalg.inv(m)
-                # up += c2w[0:3,1]
-
-                # https://github.com/nerfstudio-project/nerfstudio/issues/1504
-                c2w = self.PoseRead(pose_path, i)
-                c2w[0:3,2] *= -1 # flip the y and z axis
-                c2w[0:3,1] *= -1
-                c2w = c2w[[1,0,2,3],:] # swap y and z
-                c2w[2,:] *= -1 # flip whole world upside down
-
-                # Add pre_camera for the re-ordering in event_nerfstudio_dataparser.py
-                frame={"file_path":name, "pre_camera": self.events_collections["frame_pre"][i], "transform_matrix": c2w}
-                out["frames"].append(frame)
-
-        nframes = len(out["frames"])
-
-
-
-        # up = up / np.linalg.norm(up)
-        # print("up vector was", up)
-        # R = self.rotmat(up,[0,0,1]) # rotate up vector to [0,0,1]
-        # R = np.pad(R,[0,1])
-        # R[-1, -1] = 1
-
-
-        # for f in out["frames"]:
-        #     f["transform_matrix"] = np.matmul(R, f["transform_matrix"]) # rotate up to be the z axis
-
-        # # find a central point they are all looking at
-        # print("computing center of attention...")
-        # totw = 0.0
-        # totp = np.array([0.0, 0.0, 0.0])
-        # for f in out["frames"]:
-        #     mf = f["transform_matrix"][0:3,:]
-        #     for g in out["frames"]:
-        #         mg = g["transform_matrix"][0:3,:]
-        #         p, w = self.closest_point_2_lines(mf[:,3], mf[:,2], mg[:,3], mg[:,2])
-        #         if w > 0.01:
-        #             totp += p*w
-        #             totw += w
-        # totp /= totw
-        # print(totp) # the cameras are looking at totp
-
-        # for f in out["frames"]:
-        #     f["transform_matrix"][0:3,3] -= totp
-
-        avglen = 0.
-        for f in out["frames"]:
-            avglen += np.linalg.norm(f["transform_matrix"][0:3,3])
-        avglen /= nframes
-        print("avg camera distance from origin", avglen)
-
-        for f in out["frames"]:
-            f["transform_matrix"][0:3,3] *= 4.0 / avglen # scale to "nerf sized"
-
-        for f in out["frames"]:
-            f["transform_matrix"] = f["transform_matrix"].tolist()
-
-        print(nframes,"frames")
-        print(f"writing {OUT_PATH}")
-        with open(OUT_PATH, "w") as outfile:
-            json.dump(out, outfile, indent=2)
-        print("Writing Completed")
-
-
-# def scale_img( array):
-#     min_val = np.min(array)
-#     max_val = np.max(array)
-#     sf = 255 / (max_val - min_val)
-#     scaled_array = ((array - min_val) * sf).astype(np.uint8)
-#     return scaled_array
-
-# events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\lego\\train\\events\\test_lego1_color_init159_1e-6eps.npz'
-# eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\lego\\train\\pose",
-#                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\lego", 346, 260, debayer_method="Menon2007", is_real=False, sigma=0)
-
-# events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\drums\\train\\events\\events.npz'
-# eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\nerf\\drums\\train\\pose",
-#                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\drums", 346, 260, debayer_method="Menon2007", is_real=False, sigma=0)
-
-# events_path = 'C:\\Users\\sjxu\\Downloads\\data\\data\\real\\chick\\train\\events\\b10_cal1_45rpm_gfox_eonly-2022_05_12_00_53_10_shift_ts1.npz'
-# eventData = EventImageDatamanager(events_path, "C:\\Users\\sjxu\\Downloads\\data\\data\\real\\chick\\train\\pose",
-#                                 "C:\\Users\\sjxu\\3_Event_3DGS\\Data\\nerfstudio\\chick", 346, 260, debayer_method="Menon2007", is_real=False, sigma=0)
-
-# eventData.events_collections['frame']
-# eventData.convert_to_images()
-
-def find_npz_files(directory):
-    npz_files = []
-    try:
-        for root, dirs, filenames in os.walk(directory):
-            for filename in filenames:
-                if filename.endswith('.npz'):
-                    print("Found event data:", filename)
-                    npz_files.append(os.path.join(root, filename))
-    except Exception as e:
-        print(f"An error occurred: {e}")
-    return npz_files
+    import cv2
+
+    n = len(poses_cv)
+    period = n - 1 if np.allclose(poses_cv[0], poses_cv[-1], atol=1e-6) else n
+    centers = poses_cv[:, :3, 3]
+    extent = 0.85 * np.linalg.norm(centers, axis=1).min()  # stay inside the camera ring
+    lin = np.linspace(-extent, extent, grid)
+    pts = np.stack(np.meshgrid(lin, lin, lin, indexing="ij"), -1).reshape(-1, 3)
+    inside = np.zeros(len(pts), dtype=np.int32)
+    seen = np.zeros(len(pts), dtype=np.int32)
+    kernel = np.ones((3, 3), np.uint8)
+    for k in np.linspace(half_window, period - 1 - half_window, n_views).astype(int):
+        _, count = window_counts(events, times, k - half_window, k + half_window)
+        active = cv2.morphologyEx((count > 0).astype(np.uint8), cv2.MORPH_OPEN, kernel)
+        mask = np.zeros_like(active)
+        ys, xs = np.nonzero(active)
+        if len(xs) < 10:
+            continue
+        hull = cv2.convexHull(np.stack([xs, ys], 1).astype(np.int32))
+        cv2.fillConvexPoly(mask, hull, 1)
+        mask = cv2.dilate(mask, kernel, iterations=3)
+        c2w = poses_cv[k]
+        cam = (pts - c2w[:3, 3]) @ c2w[:3, :3]  # world -> OpenCV camera
+        z = cam[:, 2]
+        u = focal * cam[:, 0] / np.maximum(z, 1e-6) + SENSOR_W / 2
+        v = focal * cam[:, 1] / np.maximum(z, 1e-6) + SENSOR_H / 2
+        vis = (z > 1e-3) & (u >= 0) & (u < SENSOR_W) & (v >= 0) & (v < SENSOR_H)
+        seen += vis
+        ui, vi = u[vis].astype(int), v[vis].astype(int)
+        inside[np.nonzero(vis)[0][mask[vi, ui] > 0]] += 1
+    keep = (seen >= n_views // 2) & (inside >= 0.95 * seen)
+    if keep.sum() < 10:
+        raise RuntimeError("Bound estimation failed; pass --bound none or explicit values.")
+    kept = (WORLD_YDOWN_TO_ZUP[:3, :3] @ pts[keep].T).T
+    radius = np.linalg.norm(kept[:, :2], axis=1).max()
+    z_min, z_max = kept[:, 2].min(), kept[:, 2].max()
+    pad = margin * max(radius, z_max - z_min)
+    return dict(radius=float(radius + pad), z_min=float(z_min - pad), z_max=float(z_max + pad))
+
+
+def save_previews(events, times, out_dir, window, threshold, polarity_offset):
+    os.makedirs(out_dir, exist_ok=True)
+    for k in range(len(times)):
+        signed, count = window_counts(events, times, max(k - window, 0), k)
+        e = (signed + polarity_offset * count) * threshold
+        img = np.clip(0.5 + 0.5 * e, 0, 1)
+        Image.fromarray((np.repeat(img[..., None], 3, -1) * 255).astype(np.uint8)).save(
+            os.path.join(out_dir, f"r_{k:05d}.png")
+        )
 
 
 def main(args):
-    print(f'Start processing {args.root_path}')
+    scene_dir = os.path.join(args.root_path, args.scene)
+    out_dir = args.output or os.path.join(scene_dir, "output")
+    npz = sorted(glob.glob(os.path.join(scene_dir, "*.npz")) + glob.glob(os.path.join(scene_dir, "events", "*.npz")))
+    if len(npz) != 1:
+        raise FileNotFoundError(f"Expected exactly one event .npz in {scene_dir}, found {npz}")
+    events = load_events(npz[0])
+    poses_cv, _ = load_poses(os.path.join(scene_dir, "pose"))
+    n = len(poses_cv)
+    times = frame_times(events[2], n)
 
-    events_path = os.path.join(args.root_path, args.scene)
-    pose_path = os.path.join(args.root_path, args.scene, "pose")
-    out_path = os.path.join(args.root_path, args.scene, "output")
-    print("Events_path:", events_path)
-    npz_file = find_npz_files(events_path)[0]
-    eventData = EventImageDatamanager(npz_file, pose_path,
-                                    out_path, 346, 260, debayer_method="Menon2007", is_real=True, sigma=0)
-    eventData.convert_to_json()
-    eventData.convert_to_images_uniform()
+    data_type = args.type
+    if data_type == "auto":
+        # EventNeRF synthetic streams use integer millisecond stamps; real recordings are float.
+        data_type = "synthetic" if np.all(events[2] == np.round(events[2])) else "real"
+    preset = dict(PRESETS[data_type])
+    for key in ("focal", "event_threshold", "max_winsize", "tonemap_eps"):
+        if getattr(args, key) is not None:
+            preset[key] = getattr(args, key)
+    cycle = bool(np.allclose(poses_cv[0], poses_cv[-1], atol=1e-6))
+
+    if args.bound == "auto":
+        bound = estimate_bound(events, times, poses_cv, preset["focal"])
+    elif args.bound == "eventnerf":
+        bound = dict(EVENTNERF_REAL_BOUND)
+    elif args.bound == "none":
+        bound = None
+    else:
+        r, z0, z1 = (float(v) for v in args.bound.split(","))
+        bound = dict(radius=r, z_min=z0, z_max=z1)
+
+    frames = []
+    for k in range(n):
+        c2w = WORLD_YDOWN_TO_ZUP @ poses_cv[k] @ CV_TO_GL
+        frames.append({"file_path": f"images/r_{k:05d}.png", "transform_matrix": c2w.tolist(), "time": float(times[k])})
+
+    out = {
+        "fl_x": preset["focal"],
+        "fl_y": preset["focal"],
+        "cx": SENSOR_W / 2,
+        "cy": SENSOR_H / 2,
+        "w": SENSOR_W,
+        "h": SENSOR_H,
+        "camera_model": "OPENCV",
+        "k1": 0.0,
+        "k2": 0.0,
+        "p1": 0.0,
+        "p2": 0.0,
+        "orientation_override": "none",
+        "events": {
+            "path": os.path.relpath(os.path.abspath(npz[0]), os.path.abspath(out_dir)),
+            "data_type": data_type,
+            "event_threshold": preset["event_threshold"],
+            "polarity_offset": args.polarity_offset,
+            "max_winsize": int(preset["max_winsize"]),
+            "tonemap_eps": preset["tonemap_eps"],
+            "cycle": cycle,
+            "bayer": None if args.monochrome else "RGGB",
+            "background": [args.bg_color / 255.0] * 3,
+            "bound": bound,
+        },
+        "frames": frames,
+    }
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, "transforms.json"), "w") as f:
+        json.dump(out, f, indent=2)
+    print(f"[{args.scene}] {data_type}: {n} poses, {len(events[2])} events, cycle={cycle}, focal={preset['focal']}")
+    print(f"[{args.scene}] bound: {bound}")
+    save_previews(events, times, os.path.join(out_dir, "images"), preset["max_winsize"] // 2,
+                  preset["event_threshold"], args.polarity_offset)
+    print(f"[{args.scene}] wrote {out_dir}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='A simple argument parser example.')
-
-    parser.add_argument('-H', '--height', type=int, default=346, help='height.')
-    parser.add_argument('-W', '--width', type=int, default=260, help='width.')
-    parser.add_argument('-p', '--root_path', type=str, default=r'C:\Users\sjxu\3_Event_3DGS\Event3DGS\Data', help='Path to root directory.')
-    parser.add_argument('-s', '--scene', type=str, default='sewing', help='Scene name.')
-
-    args = parser.parse_args()
-    main(args)
-
-
-    
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-p", "--root_path", type=str, default="data", help="Root folder holding the scenes.")
+    parser.add_argument("-s", "--scene", type=str, default="lego", help="Scene folder name.")
+    parser.add_argument("-o", "--output", type=str, default=None, help="Output folder (default: <root>/<scene>/output).")
+    parser.add_argument("--type", choices=["auto", "synthetic", "real"], default="auto")
+    parser.add_argument("--focal", type=float, default=None, help="Override the preset focal length (pixels).")
+    parser.add_argument("--event-threshold", dest="event_threshold", type=float, default=None,
+                        help="Contrast threshold C (EventNeRF: 0.25 synthetic, 0.1 real).")
+    parser.add_argument("--polarity-offset", dest="polarity_offset", type=float, default=0.0,
+                        help="Added to every event polarity (EventNeRF real scenes: sewing -0.375, chick -0.438).")
+    parser.add_argument("--max-winsize", dest="max_winsize", type=int, default=None)
+    parser.add_argument("--tonemap-eps", dest="tonemap_eps", type=float, default=None)
+    parser.add_argument("--bg-color", dest="bg_color", type=float, default=159.0,
+                        help="Background intensity in [0, 255] (EventNeRF uses 159).")
+    parser.add_argument("--bound", type=str, default="auto",
+                        help="'auto' (event visual hull), 'eventnerf' (EventNeRF real-scene cylinder), 'none', "
+                        "or 'radius,z_min,z_max'.")
+    parser.add_argument("--monochrome", action="store_true", help="Events are not behind a Bayer filter.")
+    main(parser.parse_args())

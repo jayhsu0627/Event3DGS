@@ -49,15 +49,6 @@ from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
 
-import colour
-from colour_demosaicing import (
-    ROOT_RESOURCES_EXAMPLES,
-    demosaicing_CFA_Bayer_bilinear,
-    demosaicing_CFA_Bayer_Malvar2004,
-    demosaicing_CFA_Bayer_Menon2007,
-    mosaicing_CFA_Bayer)
-
-import cv2 
 
 TINY_NUMBER = 1e-6      # float32 only has 7 decimal digits precision
 
@@ -68,13 +59,6 @@ def img2mse(x, y, mask=None):
         return torch.mean((x - y) * (x - y))
     else:
         return torch.sum((x - y) * (x - y) * mask.unsqueeze(-1)) / (torch.sum(mask) * x.shape[-1] + TINY_NUMBER)
-
-def scale_img( array):
-    min_val = np.min(array)
-    max_val = np.max(array)
-    sf = 255 / (max_val - min_val)
-    scaled_array = ((array - min_val) * sf).astype(np.uint8)
-    return scaled_array
 
 def random_quat_tensor(N):
     """
@@ -121,15 +105,18 @@ class ESplatfactoModelConfig(ModelConfig):
     """period of steps where gaussians are culled and densified"""
     resolution_schedule: int = 3000
     """training starts at 1/d resolution, every n steps this is doubled"""
-    background_color: Literal["random", "black", "white"] = "random"
-    """Whether to randomize the background color."""
-    num_downscales: int = 2
-    """at the beginning, resolution is 1/2^d, where d is this number"""
+    background_color: Literal["dataset", "random", "black", "white"] = "dataset"
+    """Background behind the Gaussians. 'dataset' uses the background stored in transforms.json (EventNeRF: 159/255).
+    The two renders that are differenced always share the same background: an object edge produces events
+    proportional to log(object) - log(background), so the background must be the same fixed value."""
+    num_downscales: int = 0
+    """at the beginning, resolution is 1/2^d, where d is this number. Must stay 0 for Bayer (colour) events:
+    downscaling would mix the colour channels of the mosaic."""
     # cull_alpha_thresh: float = 0.1
     cull_alpha_thresh: float = 0.005
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
-    cull_scale_thresh: float = 0.5
-    """threshold of scale for culling huge gaussians"""
+    cull_scale_thresh: float = 0.1
+    """threshold of scale for culling huge gaussians. 3DGS uses 0.1 x camera extent; the EventNeRF ring has radius 0.9."""
     # continue_cull_post_densification: bool = True
     continue_cull_post_densification: bool = False
     """If True, continue to cull gaussians post refinement"""
@@ -143,13 +130,12 @@ class ESplatfactoModelConfig(ModelConfig):
     """number of samples to split gaussians into"""
     sh_degree_interval: int = 1000
     """every n intervals turn on another sh degree"""
-    cull_screen_size: float = 0.15
-    # cull_screen_size: float = 0.07
-    """if a gaussian is more than this percent of screen space, cull it"""
+    cull_screen_size: float = 0.058
+    """if a gaussian's screen radius exceeds this fraction of the image width, cull it (3DGS: 20 px at 346 px)"""
     split_screen_size: float = 0.05
     # split_screen_size: float = 0.01
     """if a gaussian is more than this percent of screen space, split it"""
-    stop_screen_size_at: int = 4000
+    stop_screen_size_at: int = 15000
     """stop culling/splitting at this step WRT screen size of gaussians"""
     random_init: bool = False
     """whether to initialize the positions uniformly randomly (not SFM points)"""
@@ -157,8 +143,23 @@ class ESplatfactoModelConfig(ModelConfig):
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 10.0
     "Size of the cube to initialize random gaussians within"
-    ssim_lambda: float = 0.8
-    """weight of ssim loss"""
+    ssim_lambda: float = 0.2
+    """weight of the D-SSIM term on the Bayer-masked event maps (official Event3DGS: 0.2)"""
+    event_threshold: Optional[float] = None
+    """contrast threshold C (log-intensity change per event). None: use the value in transforms.json."""
+    tonemap_eps: Optional[float] = None
+    """eps in log(rgb**gamma + eps). None: use the value in transforms.json (EventNeRF: 0.1 synthetic, 1e-5 real)."""
+    event_gamma: float = 2.2
+    """rendered colours are display values; rgb**gamma converts them to linear intensity (as in EventNeRF)"""
+    event_loss: Literal["mse", "l1"] = "l1"
+    """per-pixel penalty between the rendered log-intensity change and C * accumulated events"""
+    clip_to_bound: bool = True
+    """Gaussian analogue of EventNeRF's density clipping: Gaussians whose centre leaves the scene bound
+    (transforms.json events.bound) are invisible and get culled at every refinement step."""
+    rand_ratio: float = 0.7
+    """fraction of pixels kept in the event loss each step (official Event3DGS README: 0.7; 1.0 keeps all)"""
+    opacity_reg: float = 0.0
+    """weight of an L1 penalty on opacities (pushes Gaussians that explain no events towards transparency)"""
     stop_split_at: int = 15000
     """stop splitting at this step"""
     sh_degree: int = 3
@@ -205,8 +206,29 @@ class ESplatfactoModel(Model):
         super().__init__(*args, **kwargs)
 
     def populate_modules(self):
+        metadata = self.kwargs.get("metadata") or {}
+        self.event_meta = metadata.get("events") or {}
+        self.event_threshold = self.config.event_threshold or self.event_meta.get("event_threshold", 0.25)
+        self.tonemap_eps = self.config.tonemap_eps or self.event_meta.get("tonemap_eps", 1e-5)
+        self.use_bayer = self.event_meta.get("bayer", "RGGB") is not None
+        if self.use_bayer and self.config.num_downscales != 0:
+            raise ValueError("num_downscales must be 0 for Bayer event data")
+        bound = self.event_meta.get("bound")
+        self.bound = None if bound is None else (float(bound["radius"]), float(bound["z_min"]), float(bound["z_max"]))
+        self._bayer_mask = None
+        self._train_renders = []
+
         if self.seed_points is not None and not self.config.random_init:
             means = torch.nn.Parameter(self.seed_points[0])  # (Location, Color)
+        elif self.bound is not None:
+            # Uniformly inside the bounding cylinder. (Previously: a [-5, 5]^3 cube around a camera ring of
+            # radius ~1, i.e. >99% of the initial Gaussians were outside the orbit, around/behind the cameras.)
+            r, z0, z1 = self.bound
+            n = self.config.num_random
+            rad = r * torch.sqrt(torch.rand(n))
+            theta = 2 * math.pi * torch.rand(n)
+            z = z0 + (z1 - z0) * torch.rand(n)
+            means = torch.nn.Parameter(torch.stack([rad * torch.cos(theta), rad * torch.sin(theta), z], -1))
         else:
             means = torch.nn.Parameter((torch.rand((self.config.num_random, 3)) - 0.5) * self.config.random_scale)
         self.xys_grad_norm = None
@@ -265,12 +287,15 @@ class ESplatfactoModel(Model):
         self.step = 0
 
         self.crop_box: Optional[OrientedBox] = None
-        if self.config.background_color == "random":
+        if self.config.background_color == "dataset":
+            self.background_color = torch.tensor(self.event_meta.get("background", [159.0 / 255] * 3), dtype=torch.float32)
+        elif self.config.background_color == "random":
             self.background_color = torch.tensor(
                 [0.1490, 0.1647, 0.2157]
             )  # This color is the same as the default background color in Viser. This would only affect the background color when rendering.
         else:
             self.background_color = get_color(self.config.background_color)
+        self._train_background = self.background_color
 
     @property
     def colors(self):
@@ -412,27 +437,28 @@ class ESplatfactoModel(Model):
         if self.step >= self.config.stop_split_at:
             return
         with torch.no_grad():
-            # keep track of a moving average of grad norms
-            visible_mask = (self.radii > 0).flatten()
-            assert self.xys.grad is not None
-            grads = self.xys.grad.detach().norm(dim=-1)
-            # print(f"grad norm min {grads.min().item()} max {grads.max().item()} mean {grads.mean().item()} size {grads.shape}")
-            if self.xys_grad_norm is None:
-                self.xys_grad_norm = grads
-                self.vis_counts = torch.ones_like(self.xys_grad_norm)
-            else:
-                assert self.vis_counts is not None
+            # Each training step renders two views (t and t_0) and both receive gradients, so accumulate the
+            # screen-space gradient statistics of both. (Previously the second render overwrote self.xys, so only
+            # the t_0 view drove densification.)
+            for xys, radii, size in self._train_renders:
+                if xys.grad is None:
+                    continue
+                visible_mask = (radii > 0).flatten()
+                grads = xys.grad.detach().norm(dim=-1)
+                if self.xys_grad_norm is None:
+                    self.xys_grad_norm = torch.zeros_like(grads)
+                    self.vis_counts = torch.zeros_like(grads)
                 self.vis_counts[visible_mask] = self.vis_counts[visible_mask] + 1
                 self.xys_grad_norm[visible_mask] = grads[visible_mask] + self.xys_grad_norm[visible_mask]
 
-            # update the max screen size, as a ratio of number of pixels
-            if self.max_2Dsize is None:
-                self.max_2Dsize = torch.zeros_like(self.radii, dtype=torch.float32)
-            newradii = self.radii.detach()[visible_mask]
-            self.max_2Dsize[visible_mask] = torch.maximum(
-                self.max_2Dsize[visible_mask],
-                newradii / float(max(self.last_size[0], self.last_size[1])),
-            )
+                # update the max screen size, as a ratio of number of pixels
+                if self.max_2Dsize is None:
+                    self.max_2Dsize = torch.zeros_like(radii, dtype=torch.float32)
+                self.max_2Dsize[visible_mask] = torch.maximum(
+                    self.max_2Dsize[visible_mask],
+                    radii.detach()[visible_mask] / float(max(size[0], size[1])),
+                )
+            self._train_renders = []
 
     def set_crop(self, crop_box: Optional[OrientedBox]):
         self.crop_box = crop_box
@@ -450,15 +476,14 @@ class ESplatfactoModel(Model):
             # save checkpoints right when the opacity is reset (saves every 2k)
             # then cull
             # only split/cull if we've seen every image since opacity reset
+            # 3DGS schedule: densify every refine_every steps until stop_split_at. Every frame is a training
+            # camera here, so splatfacto's "seen every image since the reset" gate would skip ~1100 steps per cycle.
             reset_interval = self.config.reset_alpha_every * self.config.refine_every
-            do_densification = (
-                self.step < self.config.stop_split_at
-                and self.step % reset_interval > self.num_train_data + self.config.refine_every
-            )
+            do_densification = self.step < self.config.stop_split_at
             if do_densification:
                 # then we densify
                 assert self.xys_grad_norm is not None and self.vis_counts is not None and self.max_2Dsize is not None
-                avg_grad_norm = (self.xys_grad_norm / self.vis_counts) * 0.5 * max(self.last_size[0], self.last_size[1])
+                avg_grad_norm = (self.xys_grad_norm / self.vis_counts.clamp(min=1)) * 0.5 * max(self.last_size[0], self.last_size[1])
                 high_grads = (avg_grad_norm > self.config.densify_grad_thresh).squeeze()
                 splits = (self.scales.exp().max(dim=-1).values > self.config.densify_size_thresh).squeeze()
                 if self.step < self.config.stop_screen_size_at:
@@ -513,6 +538,13 @@ class ESplatfactoModel(Model):
             if deleted_mask is not None:
                 self.remove_from_all_optim(optimizers, deleted_mask)
 
+            outside = self.outside_bound(self.means)
+            if outside is not None and outside.any():
+                for name, param in self.gauss_params.items():
+                    self.gauss_params[name] = torch.nn.Parameter(param[~outside])
+                self.remove_from_all_optim(optimizers, outside)
+                CONSOLE.log(f"Culled {int(outside.sum())} gaussians outside the scene bound ({self.num_points} remaining)")
+
             if self.step < self.config.stop_split_at and self.step % reset_interval == self.config.refine_every:
                 # Reset value is set to be twice of the cull_alpha_thresh
                 reset_value = self.config.cull_alpha_thresh * 2.0
@@ -530,6 +562,13 @@ class ESplatfactoModel(Model):
             self.xys_grad_norm = None
             self.vis_counts = None
             self.max_2Dsize = None
+
+    def outside_bound(self, means: torch.Tensor) -> Optional[torch.Tensor]:
+        """Boolean mask of Gaussians whose centre lies outside the scene's bounding cylinder (None if no clipping)."""
+        if not self.config.clip_to_bound or self.bound is None:
+            return None
+        r, z0, z1 = self.bound
+        return (means[:, 0] ** 2 + means[:, 1] ** 2 > r * r) | (means[:, 2] < z0) | (means[:, 2] > z1)
 
     def cull_gaussians(self, extra_cull_mask: Optional[torch.Tensor] = None):
         """
@@ -635,6 +674,14 @@ class ESplatfactoModel(Model):
 
     def step_cb(self, step):
         self.step = step
+        self._train_renders = []
+        # one background per training step, shared by the t and t_0 renders
+        if self.config.background_color == "random":
+            self._train_background = torch.rand(3)
+        elif self.config.background_color in ("white", "black"):
+            self._train_background = get_color(self.config.background_color)
+        else:
+            self._train_background = self.background_color
 
     def get_gaussian_param_groups(self) -> Dict[str, List[Parameter]]:
         # Here we explicitly use the means, scales as parameters so that the user can override this function and
@@ -691,16 +738,9 @@ class ESplatfactoModel(Model):
 
         # get the background color
         if self.training:
-            # optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)[0, ...]
-
-            if self.config.background_color == "random":
-                background = torch.rand(3, device=self.device)
-            elif self.config.background_color == "white":
-                background = torch.ones(3, device=self.device)
-            elif self.config.background_color == "black":
-                background = torch.zeros(3, device=self.device)
-            else:
-                background = self.background_color.to(self.device)
+            # Same background for both renders of a step (set in step_cb). Previously each render drew its own
+            # random colour, so every background pixel of the rendered difference was noise.
+            background = self._train_background.to(self.device)
         else:
             # optimized_camera_to_world = camera.camera_to_worlds[0, ...]
 
@@ -782,8 +822,11 @@ class ESplatfactoModel(Model):
             return {"rgb": rgb, "depth": depth, "accumulation": accumulation, "background": background}
 
         # Important to allow xys grads to populate properly
-        if self.training:
+        # (requires_grad check: the nerfstudio viewer thread toggles model.train()/eval() while the trainer renders
+        # eval images under no_grad, so self.training alone is not a reliable signal.)
+        if self.training and self.xys.requires_grad:
             self.xys.retain_grad()
+            self._train_renders.append((self.xys, self.radii, self.last_size))
 
         if self.config.sh_degree > 0:
             viewdirs = means_crop.detach() - camera.camera_to_worlds.detach()[..., :3, 3]  # (N, 3)
@@ -804,6 +847,9 @@ class ESplatfactoModel(Model):
             opacities = torch.sigmoid(opacities_crop)
         else:
             raise ValueError("Unknown rasterize_mode: %s", self.config.rasterize_mode)
+        outside = self.outside_bound(means_crop)
+        if outside is not None:
+            opacities = opacities * (~outside).to(opacities.dtype)[:, None]
 
         rgb, alpha = rasterize_gaussians(  # type: ignore
             self.xys,
@@ -820,7 +866,9 @@ class ESplatfactoModel(Model):
             return_alpha=True,
         )  # type: ignore
         alpha = alpha[..., None]
-        rgb = torch.clamp(rgb, max=1.0)  # type: ignore
+        if not self.training:
+            # Clamping during training would zero the event-loss gradient of every pixel above 1.
+            rgb = torch.clamp(rgb, max=1.0)  # type: ignore
         depth_im = None
         if self.config.output_depth_during_training or not self.training:
             depth_im = rasterize_gaussians(  # type: ignore
@@ -864,6 +912,44 @@ class ESplatfactoModel(Model):
         else:
             return image
 
+    def bayer_mask(self, H: int, W: int) -> torch.Tensor:
+        """(H, W, 3) one-hot RGGB colour filter of the DAVIS 346C (EventNeRF convention)."""
+        if self._bayer_mask is None or self._bayer_mask.shape[:2] != (H, W):
+            m = torch.zeros((H, W, 3), device=self.device)
+            m[0::2, 0::2, 0] = 1  # r
+            m[0::2, 1::2, 1] = 1  # g
+            m[1::2, 0::2, 1] = 1  # g
+            m[1::2, 1::2, 2] = 1  # b
+            self._bayer_mask = m
+        return self._bayer_mask
+
+    def event_prediction(self, rgb: torch.Tensor, rgb_pre: torch.Tensor) -> torch.Tensor:
+        """Rendered log-intensity change between the t_0 and t renders, as seen through the sensor.
+
+        Events fire on changes of log *linear* intensity, so the difference is taken in log space
+        (log(rgb**gamma + eps), as in EventNeRF), not on display RGB. For a colour sensor each pixel only
+        sees one channel of its Bayer filter, so the prediction is (H, W); otherwise (H, W, 3).
+        """
+        g, eps = self.config.event_gamma, self.tonemap_eps
+        diff = torch.log(rgb.clamp(min=0) ** g + eps) - torch.log(rgb_pre.clamp(min=0) ** g + eps)
+        if self.use_bayer:
+            return (diff * self.bayer_mask(*diff.shape[:2])).sum(-1)
+        return diff
+
+    def event_target(self, batch, like: torch.Tensor) -> torch.Tensor:
+        """C * (accumulated signed events (+ polarity offset)) of the window; zero where nothing fired."""
+        target = batch["events"].to(self.device) * self.event_threshold
+        return target if like.dim() == 2 else target[..., None].expand_as(like)
+
+    def loss_view(self, pred: torch.Tensor, target: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """(H, W, 3) maps as the official Event3DGS loss sees them: each pixel only in its Bayer channel,
+        on a random rand_ratio subset of pixels."""
+        if pred.dim() == 2:
+            m = self.bayer_mask(*pred.shape)
+            pred, target = pred[..., None] * m, target[..., None] * m
+        keep = (torch.rand(pred.shape[:2], device=self.device) < self.config.rand_ratio).to(pred.dtype)[..., None]
+        return pred * keep, target * keep
+
     def get_metrics_dict(self, outputs, outputs_pre, batch) -> Dict[str, torch.Tensor]:
         """Compute and returns metrics.
 
@@ -871,16 +957,15 @@ class ESplatfactoModel(Model):
             outputs: the output to compute loss dict to
             batch: ground truth batch corresponding to outputs
         """
-        gt_rgb = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
         metrics_dict = {}
-        predicted_rgb = outputs["rgb"]
-        pre_predicted_rgb = outputs_pre["rgb"]
-
-        metrics_dict["psnr"] = self.psnr(predicted_rgb - pre_predicted_rgb, gt_rgb)
-
+        with torch.no_grad():
+            pred = self.event_prediction(outputs["rgb"], outputs_pre["rgb"])
+            target = self.event_target(batch, pred)
+            mse = torch.mean((pred - target) ** 2)
+            metrics_dict["event_mse"] = mse
+            # error relative to predicting "no change" everywhere (1.0 = no better than a blank model)
+            metrics_dict["event_mse_rel"] = mse / torch.mean(target**2).clamp(min=1e-12)
         metrics_dict["gaussian_count"] = self.num_points
-
-        # self.camera_optimizer.get_metrics_dict(metrics_dict)
         return metrics_dict
 
     def get_loss_dict(self, outputs, outputs_pre, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
@@ -891,65 +976,16 @@ class ESplatfactoModel(Model):
             batch: ground truth batch corresponding to outputs
             metrics_dict: dictionary of metrics, some of which we can use for loss
         """
-        gt_img = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
-        pred_img = outputs["rgb"]
-        pre_pred_img = outputs_pre["rgb"]
-        
-        (H, W, _) = pre_pred_img.shape
-        # Set masked part of both ground-truth and rendered image to black.
-        # This is a little bit sketchy for the SSIM loss.
-        if "mask" in batch:
-            # batch["mask"] : [H, W, 1]
-            mask = self._downscale_if_required(batch["mask"])
-            mask = mask.to(self.device)
-            assert mask.shape[:2] == gt_img.shape[:2] == pred_img.shape[:2]
-            gt_img = gt_img * mask
-            pred_img = pred_img * mask
-            pre_pred_img = pre_pred_img * mask
-
-        color_mask = np.zeros((H, W, 3))
-        color_mask[0::2, 0::2, 0] = 1  # r
-        color_mask[0::2, 1::2, 1] = 1  # g
-        color_mask[1::2, 0::2, 1] = 1  # g
-        color_mask[1::2, 1::2, 2] = 1  # b
-
-        # if self.is_colored:
-        #     self.color_mask[0::2, 0::2, 0] = 1  # r
-        #     self.color_mask[0::2, 1::2, 1] = 1  # g
-        #     self.color_mask[1::2, 0::2, 1] = 1  # g
-        #     self.color_mask[1::2, 1::2, 2] = 1  # b
-        # else:
-        #     self.color_mask[...] = 1
-
-        color_mask = color_mask.reshape((-1, 3))
-        color_mask = torch.from_numpy(color_mask).to(self.device)
-        # print(pred_img.size())
-
-        # diff = torch.log(pred_img**2.2+1e-5)-torch.log(pre_pred_img**2.2+1e-5)  
-        # diff = torch.log(pred_img+1e-5)/2.2-torch.log(pre_pred_img+1e-5)/2.2
-        diff = pred_img - pre_pred_img
-
-        if self.step % 5000 == 1:
-            numpy_horizontal = np.hstack(((gt_img).cpu().detach().numpy(), (pred_img).cpu().detach().numpy()))
-            numpy_horizontal = np.hstack((numpy_horizontal, pre_pred_img.cpu().detach().numpy()))
-            numpy_horizontal = np.hstack((numpy_horizontal, diff.cpu().detach().numpy()))
-            # cv2.imshow('pre_pred_img',numpy_horizontal)
-            # cv2.waitKey(0)
-            numpy_horizontal*=255
-            filename = "C:\\Users\\sjxu\\Downloads\\drums_new_" + str(self.step) +".png"
-            cv2.imwrite(filename, cv2.cvtColor(numpy_horizontal, cv2.COLOR_RGB2BGR))
-
-        event_mask = None
-        THR = 0.5
-        # THR = 1.0
-        event_loss = img2mse(diff, gt_img*THR, event_mask)
-        
-        # Ll1 = torch.abs(gt_img - pred_img).mean()
-        Ll1 = event_loss
-
-        # Ll1 = torch.abs(gt_img*THR - diff).mean()
-
-        simloss = 1 - self.ssim((gt_img*THR).permute(2, 0, 1)[None, ...], diff.permute(2, 0, 1)[None, ...])
+        pred = self.event_prediction(outputs["rgb"], outputs_pre["rgb"])
+        target = self.event_target(batch, pred)
+        pred, target = self.loss_view(pred, target)
+        err = pred - target
+        Ll1 = err.pow(2).mean() if self.config.event_loss == "mse" else err.abs().mean()
+        if self.config.ssim_lambda > 0:
+            p, t = pred.permute(2, 0, 1)[None], target.permute(2, 0, 1)[None]
+            simloss = 1 - SSIM(data_range=1.0, size_average=True, channel=3)(p, t)
+        else:
+            simloss = torch.zeros((), device=self.device)
 
         if self.config.use_scale_regularization and self.step % 10 == 0:
             scale_exp = torch.exp(self.scales)
@@ -963,46 +999,13 @@ class ESplatfactoModel(Model):
             scale_reg = 0.1 * scale_reg.mean()
         else:
             scale_reg = torch.tensor(0.0).to(self.device)
-        # print("event_loss:=====", event_loss)
-        return {
-
-                    "main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss,
-                    # "main_loss": event_loss,
-
-                    "scale_reg": scale_reg,
-
-                }
-
-        # event_mask = None
-        # THR = 0.5
-        # # THR = 1.0
-
-        # Ll1 = torch.abs(gt_img*THR - diff).mean()
-        # simloss = 1 - self.ssim((gt_img*THR).permute(2, 0, 1)[None, ...], diff.permute(2, 0, 1)[None, ...])
-        # main_loss = (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss
-        # event_loss = img2mse(main_loss, gt_img*0, event_mask)
-        
-        # if self.config.use_scale_regularization and self.step % 10 == 0:
-        #     scale_exp = torch.exp(self.scales)
-        #     scale_reg = (
-        #         torch.maximum(
-        #             scale_exp.amax(dim=-1) / scale_exp.amin(dim=-1),
-        #             torch.tensor(self.config.max_gauss_ratio),
-        #         )
-        #         - self.config.max_gauss_ratio
-        #     )
-        #     scale_reg = 0.1 * scale_reg.mean()
-        # else:
-        #     scale_reg = torch.tensor(0.0).to(self.device)
-        # # print("event_loss:=====", event_loss)
-        # return {
-
-        #             "main_loss": event_loss,
-        #             # "main_loss": event_loss,
-
-        #             "scale_reg": scale_reg,
-
-        #         }
+        loss_dict = {
+            "main_loss": (1 - self.config.ssim_lambda) * Ll1 + self.config.ssim_lambda * simloss,
+            "scale_reg": scale_reg,
+        }
+        if self.config.opacity_reg > 0:
+            loss_dict["opacity_reg"] = self.config.opacity_reg * torch.sigmoid(self.opacities).mean()
+        return loss_dict
 
     @torch.no_grad()
     def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:
@@ -1031,31 +1034,11 @@ class ESplatfactoModel(Model):
         Returns:
             A dictionary of metrics.
         """
-        gt_rgb = self.composite_with_background(self.get_gt_img(batch["image"]), outputs["background"])
-        d = self._get_downscale_factor()
-        if d > 1:
-            # torchvision can be slow to import, so we do it lazily.
-            import torchvision.transforms.functional as TF
-
-            newsize = [batch["image"].shape[0] // d, batch["image"].shape[1] // d]
-            predicted_rgb = TF.resize(outputs["rgb"].permute(2, 0, 1), newsize, antialias=None).permute(1, 2, 0)
-        else:
-            predicted_rgb = outputs["rgb"]
-
-        combined_rgb = torch.cat([gt_rgb, predicted_rgb], dim=1)
-
-        # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
-        gt_rgb = torch.moveaxis(gt_rgb, -1, 0)[None, ...]
-        predicted_rgb = torch.moveaxis(predicted_rgb, -1, 0)[None, ...]
-
-        psnr = self.psnr(gt_rgb, predicted_rgb)
-        ssim = self.ssim(gt_rgb, predicted_rgb)
-        lpips = self.lpips(gt_rgb, predicted_rgb)
-
-        # all of these metrics will be logged as scalars
-        metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim)}  # type: ignore
-        metrics_dict["lpips"] = float(lpips)
-
-        images_dict = {"img": combined_rgb}
-
+        # The dataset "images" are only previews of event windows, so there is no RGB ground truth to score against
+        # (use scripts/eval_gt.py with EventNeRF's ground-truth views for PSNR/SSIM/LPIPS). Show the render, the
+        # event preview it corresponds to and the accumulated opacity (floaters show up there).
+        preview = self.get_gt_img(batch["image"])[..., :3]
+        acc = outputs["accumulation"].repeat(1, 1, 3)
+        images_dict = {"img": torch.cat([preview, outputs["rgb"], acc], dim=1)}
+        metrics_dict = {"gaussian_count": float(self.num_points)}
         return metrics_dict, images_dict

@@ -107,9 +107,19 @@ class Nerfstudio(DataParser):
         mask_filenames = []
         depth_filenames = []
         poses = []
-        pre_poses = []
 
         pre_camera = [] # store the order of the pre_camera frame (t_0)
+
+        # Datasets written by the current dataloader.py carry an "events" block. Their poses are already in
+        # a fixed, metric z-up frame (the scene bound is expressed in it), so we must not re-orient/re-scale.
+        event_meta = meta.get("events")
+        if event_meta is not None:
+            self.downscale_factor = 1  # event targets live at sensor resolution (Bayer layout)
+        else:
+            CONSOLE.print(
+                "[bold yellow]transforms.json has no 'events' block: it was written by the old dataloader.py, "
+                "whose min-max scaled event images are not valid supervision. Re-run dataloader.py."
+            )
 
         fx_fixed = "fl_x" in meta
         fy_fixed = "fl_y" in meta
@@ -178,7 +188,7 @@ class Nerfstudio(DataParser):
 
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
-            pre_camera.append(frame["pre_camera"])
+            pre_camera.append(frame.get("pre_camera", len(pre_camera)))
 
             if "mask_path" in frame:
                 mask_filepath = Path(frame["mask_path"])
@@ -216,6 +226,13 @@ class Nerfstudio(DataParser):
             indices = np.array(indices, dtype=np.int32)
         elif has_split_files_spec:
             raise RuntimeError(f"The dataset's list of filenames for split {split} is missing.")
+        elif event_meta is not None:
+            # Event windows can end at any pose, so every pose is a training camera (in time order).
+            # The eval split is just a sparse set of views for rendering/visualisation.
+            if split == "train":
+                indices = np.arange(len(image_filenames))
+            else:
+                indices = np.arange(0, len(image_filenames), max(1, len(image_filenames) // 40))
         else:
             # find train and eval indices based on the eval_mode specified
             if self.config.eval_mode == "fraction":
@@ -245,16 +262,19 @@ class Nerfstudio(DataParser):
         else:
             orientation_method = self.config.orientation_method
 
+        center_method = "none" if event_meta is not None else self.config.center_method
+        auto_scale_poses = self.config.auto_scale_poses and event_meta is None
+
         poses = torch.from_numpy(np.array(poses).astype(np.float32))
         poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
             poses,
             method=orientation_method,
-            center_method=self.config.center_method,
+            center_method=center_method,
         )
 
         # Scale poses
         scale_factor = 1.0
-        if self.config.auto_scale_poses:
+        if auto_scale_poses:
             scale_factor /= float(torch.max(torch.abs(poses[:, :3, 3])))
         scale_factor *= self.config.scale_factor
 
@@ -265,42 +285,16 @@ class Nerfstudio(DataParser):
         mask_filenames = [mask_filenames[i] for i in indices] if len(mask_filenames) > 0 else []
         depth_filenames = [depth_filenames[i] for i in indices] if len(depth_filenames) > 0 else []
 
-        ###### Reordering for pre_cameras ######
-        # pre_poses = torch.empty_like(poses)  # record poses
-        # num, m, n = poses.shape
+        ###### pre_cameras (t_0) ######
+        # The t_0 camera of frame k is simply another pose of the same trajectory. It must live in exactly the
+        # same normalised frame as the t cameras. (Previously the t_0 poses were re-oriented, re-centred and
+        # re-scaled on their own, which shifted the same physical camera by ~1% of the orbit radius, i.e. a few
+        # pixels, between the two renders that are differenced.)
+        pre_poses = poses[torch.tensor(pre_camera, dtype=torch.long)]
 
-        
-        # pre_camera.append(frame["pre_camera"])
-
-        for i in pre_camera:
-            pre_poses.append(np.array(frames[i]["transform_matrix"]))
-            # pre_poses[i] = poses[i-1]
-            # print(i-1)
-            # pre_poses[(i-1)//100] = poses[(i-1)//100]
-
-        pre_poses = torch.from_numpy(np.array(pre_poses).astype(np.float32))
-        pre_poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
-            pre_poses,
-            method=orientation_method,
-            center_method=self.config.center_method,
-        )
-
-        # Scale pre_poses
-        scale_factor = 1.0
-        if self.config.auto_scale_poses:
-            scale_factor /= float(torch.max(torch.abs(pre_poses[:, :3, 3])))
-        scale_factor *= self.config.scale_factor
-
-        pre_poses[:, :3, 3] *= scale_factor
-
-        ###### -------------------------- ######
-        # print("before:",len(poses))
         idx_tensor = torch.tensor(indices, dtype=torch.long)
         poses = poses[idx_tensor]
         pre_poses = pre_poses[idx_tensor]
-        # print("after:",len(poses))
-        print(idx_tensor)
-        print(pre_camera)
 
         # in x,y,z order
         # assumes that the scene is centered at the origin
@@ -407,6 +401,12 @@ class Nerfstudio(DataParser):
 
         # reinitialize metadata for dataparser_outputs
         metadata = {}
+        if event_meta is not None:
+            event_meta = dict(event_meta)
+            event_meta["path"] = str((data_dir / event_meta["path"]).resolve())
+            event_meta["frame_times"] = [float(f["time"]) for f in frames] if "time" in frames[0] else None
+            event_meta["frame_indices"] = [int(i) for i in indices]
+            metadata["events"] = event_meta
 
         # _generate_dataparser_outputs might be called more than once so we check if we already loaded the point cloud
         try:
@@ -555,364 +555,3 @@ class Nerfstudio(DataParser):
         if self.downscale_factor > 1:
             return data_dir / f"{downsample_folder_prefix}{self.downscale_factor}" / filepath.name
         return data_dir / filepath
-
-
-
-import os
-import numpy as np
-from matplotlib import pyplot as plt
-import math
-import json
-import cv2
-import imageio
-import bm4d
-import os
-import colour
-from colour_demosaicing import (
-    ROOT_RESOURCES_EXAMPLES,
-    demosaicing_CFA_Bayer_bilinear,
-    demosaicing_CFA_Bayer_Malvar2004,
-    demosaicing_CFA_Bayer_Menon2007,
-    mosaicing_CFA_Bayer)
-
-num_events = 53644
-
-class EventImageDatamanager:
-    """
-    A datamanager that outputs full images and cameras instead of raybundles.
-    This makes the datamanager more lightweight since we don't have to do generate rays.
-    Useful for full-image training e.g. rasterization pipelines.
-    deblur_method = ["bilinear", "Malvar2004", "Menon2007"]
-    The BM4D is the deblur stage, which take quite a long time. Default is off, but it can significantly
-    improve synthetic datasets.
-    """
-    def __init__(self, event_file_path, pose_directory, out_directory, width, height, debayer_method=None, sigma=0):
-        self.img_size = (height, width)
-        self.debayer = False
-        self.is_colored = True
-        # self.img = np.zeros(self.img_size, dtype=np.int8)
-        self.event_file_path = event_file_path
-        self.pose_directory = pose_directory
-        self.out_directory = out_directory
-        self.F = np.array([[[1, 0, 0], [0, 1, 0]], [[0, 1, 0], [0, 0, 1]]])
-        self.F_tile = np.tile(self.F, (int(height/2), int(width/2), 1))
-        self.debayer_method = debayer_method
-        self.deblur = False
-
-        if sigma>0:
-            self.deblur = True
-            self.sigma = sigma
-        self.getEventData()
-
-        # Check if the directory exists, create it if it doesn't
-        if not os.path.exists(self.out_directory):
-            os.makedirs(self.out_directory)
-
-    def loadEventNPZData(self):
-        """Idx: Store the event line of the timestep for each output frames. range from [0-999]
-           Usage: idx[t_i-1] to idx[t_i] capture events motion image.
-                   0         to idx[t_i] capture RGB image
-        """
-        self.event_data = np.load(self.event_file_path)
-        self.timestamp, self.x, self.y, self.pol = self.event_data['t'], self.event_data['x'], self.event_data['y'], self.event_data['p']
-        print("Data length:", len(self.timestamp))
-        self.idx = []
-        j=0
-        t = self.timestamp[0]
-        frame = 0
-        for j in range(107500):
-            if self.timestamp[j]>t:
-                print("Data shutter:", j)
-                break
-        start_pt = 0
-        for k in range(start_pt,len(self.timestamp)):
-            if self.timestamp[k]>t:
-                # print('Data streams per frame:',k-start_pt,t)
-                start_pt = k
-                t+= (self.timestamp[-1] - self.timestamp[0])/1000
-                self.idx.append(k-1)
-                continue
-        print("idx: ", self.idx)
-        print("Frame: ", len(self.idx))
-
-    def loadEventTXTData(self):
-        infile = open(self.event_file_path, 'r')
-        timestamp, x, y, pol = [], [], [], []
-        for line in infile:
-            words = line.split()
-            timestamp.append(float(words[0]))
-            x.append(int(words[1]))
-            y.append(int(words[2]))
-            pol.append(int(words[3]))
-        infile.close()
-        self.timestamp, self.x, self.y, self.pol = timestamp, x, y, pol
-
-        print("Data length:", len(self.timestamp))
-        self.idx = []
-        j=0
-        t = self.timestamp[0]
-        frame = 0
-        for j in range(107500):
-            if self.timestamp[j]>t:
-                print("Data shutter:", j)
-                break
-        start_pt = 0
-        for k in range(start_pt,len(self.timestamp)):
-            if self.timestamp[k]>t:
-                # print('Data streams per frame:',k-start_pt,t)
-                start_pt = k
-                t+= (self.timestamp[-1] - self.timestamp[0])/1000
-                self.idx.append(k-1)
-                continue
-        print("idx: ", self.idx)
-        print("Frame: ", len(self.idx))
-
-    def getFileType(self):
-        root, ext = os.path.splitext(self.event_file_path)
-        return ext
-
-    def getEventData(self):
-        if self.getFileType() == ".txt":
-            print("Loaded txt")
-            self.loadEventTXTData()
-
-        if self.getFileType() == ".npz":
-            print("Loaded npz")
-            self.loadEventNPZData()
-
-    def scale_img(self, array):
-        min_val = np.min(array)
-        max_val = np.max(array)
-        sf = 255 / (max_val - min_val)
-        scaled_array = ((array - min_val) * sf).astype(np.uint8)
-        return scaled_array
-
-    def convertCameraImg(self, num_events, start=0):
-        # print("before:", np.max(img), np.min(img))
-        # self.img = np.zeros(self.img_size , dtype=np.float32)
-        # self.img = np.zeros(self.img_size , dtype=np.float32) + np.log(125) / 2.2
-        self.img = np.zeros(self.img_size , dtype=np.float32) + np.log(127) / 2.2
-        self.bayer = np.zeros(self.img_size, np.float32)
-        start = start
-
-        # print(self.img[:5,:5])
-
-        print("Load event img at :", num_events)
-        self.t_ref = self.timestamp[0] # time of the last event in the packet
-        self.tau = 0.03 # decay parameter (in seconds)
-        self.dt = num_events*10
-
-        for i in range(start, num_events):
-            self.img[self.y[i], self.x[i]] += self.pol[i]
-
-        bg_mask = self.img == np.log(127) / 2.2
-
-        self.img = np.tile(self.img[..., None], (1, 1, 3))
-        # img = np.tile(img[..., None], (1, 1, 3)) + np.log(159) / 2.2
-
-        print(self.img[:2,:2])
-        print("1. Before:", np.max(self.img), np.min(self.img), self.img.shape)
-
-        self.bayer = self.scale_img(self.img)
-
-        # Apply mask
-        # self.bayer[bg_mask] = 198
-
-        self.img_gray = self.bayer
-        self.bayer = self.F_tile * self.img_gray
-        print("bayer input", np.max(self.bayer), np.min(self.bayer))
-        self.bayer = np.clip(np.exp(self.bayer * 2.2), 0, 255).astype(np.uint8)
-
-        if self.debayer_method:
-            # mosaic
-            self.CFA = mosaicing_CFA_Bayer(self.img_gray)
-            print('here')
-            # Menon2007
-            if self.debayer_method == "bilinear":
-                self.bayer = demosaicing_CFA_Bayer_bilinear(self.CFA)
-            if self.debayer_method == "Malvar2004":
-                self.bayer = demosaicing_CFA_Bayer_Malvar2004(self.CFA)
-            if self.debayer_method == "Menon2007":
-                self.bayer = demosaicing_CFA_Bayer_Menon2007(self.CFA)
-            self.bayer = self.scale_img(self.bayer)
-            print("debayer_method", np.max(self.bayer), np.min(self.bayer))
-
-        if self.deblur:
-            self.bayer = bm4d.bm4d(self.bayer, self.sigma); # white noise: include noise std
-            self.bayer = self.scale_img(self.bayer)
-
-        # # Set background color for RGB
-        # self.bayer[bg_mask] = 125
-
-        # # Apply mask
-        # self.bayer[bg_mask] = 198
-        # self.bayer = np.clip(np.exp(self.bayer * 2.2), 0, 255).astype(np.uint8)
-        # self.bayer = np.exp(self.bayer * 2.2)
-
-        print(self.bayer[:2,:2])
-        print("2. After:", np.max(self.bayer), np.min(self.bayer), self.bayer.shape)
-
-        return self.img_gray, self.bayer
-
-    def AccuDiffCameraImg(self, t_0, t):
-        """ Eq.3 the observed events {Ei}_{i=1}^N between rendered views (multiplied by Bayer colour filter)
-        taken at two different time instants t0 and t. (t - t_0).
-        """
-        return self.convertCameraImg(t, t_0)
-
-    def ImgPlot(self, img):
-        fig = plt.figure(figsize=(21,6))
-        plt.subplot(1,4,1)
-        plt.imshow(img[:,:,0], clim=(0, 255))
-        plt.subplot(1,4,2)
-        plt.imshow(img[:,:,1], clim=(0, 255))
-        plt.subplot(1,4,3)
-        plt.imshow(img[:,:,2], clim=(0, 255))
-        plt.subplot(1,4,4)
-        plt.imshow(img, clim=(0, 255))
-        plt.show()
-
-    def ImgSave(self, img, file_path, file_name):
-        # Save the image to a PNG file
-        imageio.imwrite(file_path + str(file_name) +'.png', img)
-
-    def PoseRead(self, file_path, frame_num):
-        file_path = os.path.join(file_path, 'r_'+'{:05d}'.format(frame_num) + ".txt")
-        try:
-            with open(file_path, 'r') as file:
-                # Read each line in the file
-                lines = file.readlines()
-                # Parse each line to extract the elements of the camera matrix
-                camera_matrix = []
-                for line in lines:
-                    elements = line.split()
-                    camera_matrix.append([float(element) for element in elements])
-                camera_matrix = np.array(camera_matrix)
-                print("test:", camera_matrix)
-                return camera_matrix
-
-        except FileNotFoundError:
-            print(f"Error: File '{file_path}' not found.")
-            return None
-        except Exception as e:
-            print(f"Error: {e}")
-            return None
-    
-    def convert_to_json (self):
-        AABB_SCALE = 1
-        text = os.path.normpath(self.pose_directory) # + '/text')
-        OUT_PATH = os.path.normpath(self.out_directory + '/' + "transforms.json")
-        # sparce = os.path.normpath(args.scenedir + '/sparse')
-                
-        # 1 SIMPLE_RADIAL 2048 1536 1580.46 1024 768 0.0045691
-        # 1 OPENCV 3840 2160 3178.27 3182.09 1920 1080 0.159668 -0.231286 -0.00123982 0.00272224
-        # 1 RADIAL 1920 1080 1665.1 960 540 0.0672856 -0.0761443
-
-        w = self.img_size[1]
-        h = self.img_size[0]
-        fl_x = 0
-        fl_y = 0
-        k1 = 0
-        k2 = 0
-        p1 = 0
-        p2 = 0
-        cx = w / 2
-        cy = h / 2
-
-        # angle_x = math.atan(w / (fl_x * 2)) * 2
-        # angle_y = math.atan(h / (fl_y * 2)) * 2
-        # fovx = angle_x * 180 / math.pi
-        # fovy = angle_y * 180 / math.pi
-
-        # with open(os.path.join(text,"images.txt"), "r") as f:
-        bottom = np.array([0.0, 0.0, 0.0, 1.0]).reshape([1, 4])
-        out = {
-            # "camera_angle_x": angle_x,
-            # "camera_angle_y": angle_y,
-            "fl_x": fl_x,
-            "fl_y": fl_y,
-            "k1": k1,
-            "k2": k2,
-            "p1": p1,
-            "p2": p2,
-            "cx": cx,
-            "cy": cy,
-            "w": w,
-            "h": h,
-            "aabb_scale": AABB_SCALE,
-            "frames": [],
-        }
-
-        up = np.zeros(3)
-
-        for i in range(6):
-            if  i % 2 == 1:
-                # elems=line.split(" ") # 1-4 is quat, 5-7 is trans, 9ff is filename (9, if filename contains no spaces)
-                pose_path = str(f"/content/")
-                name = str(f"./images/frame_{'{:05d}'.format(i)}.png")
-                print(name)
-                # b=sharpness(os.path.normpath(f"{args.scenedir}/{args.images}/{elems[9]}"))
-                # print(name, "sharpness=",b)
-                # image_id = int(elems[0])
-                # qvec = np.array(tuple(map(float, elems[1:5])))
-                # tvec = np.array(tuple(map(float, elems[5:8])))
-                # R = qvec2rotmat(-qvec)
-                # t = tvec.reshape([3,1])
-                # m = np.concatenate([np.concatenate([R, t], 1), bottom], 0)
-                # c2w = np.linalg.inv(m)
-                # c2w[0:3,2] *= -1 # flip the y and z axis
-                # c2w[0:3,1] *= -1
-                # c2w = c2w[[1,0,2,3],:] # swap y and z
-                # c2w[2,:] *= -1 # flip whole world upside down
-
-                # up += c2w[0:3,1]
-                
-                c2w = self.PoseRead(pose_path, i)
-                # frame={"file_path":name,"sharpness":b,"transform_matrix": c2w}
-                frame={"file_path":name, "transform_matrix": c2w}
-
-                out["frames"].append(frame)
-
-        nframes = len(out["frames"])
-        # up = up / np.linalg.norm(up)
-        # print("up vector was", up)
-        # R = rotmat(up,[0,0,1]) # rotate up vector to [0,0,1]
-        # R = np.pad(R,[0,1])
-        # R[-1, -1] = 1
-
-
-        # for f in out["frames"]:
-        #     f["transform_matrix"] = np.matmul(R, f["transform_matrix"]) # rotate up to be the z axis
-
-        # # find a central point they are all looking at
-        # print("computing center of attention...")
-        # totw = 0.0
-        # totp = np.array([0.0, 0.0, 0.0])
-        # for f in out["frames"]:
-        #     mf = f["transform_matrix"][0:3,:]
-        #     for g in out["frames"]:
-        #         mg = g["transform_matrix"][0:3,:]
-        #         p, w = closest_point_2_lines(mf[:,3], mf[:,2], mg[:,3], mg[:,2])
-        #         if w > 0.01:
-        #             totp += p*w
-        #             totw += w
-        # totp /= totw
-        # print(totp) # the cameras are looking at totp
-        # for f in out["frames"]:
-        #     f["transform_matrix"][0:3,3] -= totp
-
-        # avglen = 0.
-        # for f in out["frames"]:
-        #     avglen += np.linalg.norm(f["transform_matrix"][0:3,3])
-        # avglen /= nframes
-        # print("avg camera distance from origin", avglen)
-        # for f in out["frames"]:
-        #     f["transform_matrix"][0:3,3] *= 4.0 / avglen # scale to "nerf sized"
-
-        for f in out["frames"]:
-            f["transform_matrix"] = f["transform_matrix"].tolist()
-
-        print(nframes,"frames")
-        print(f"writing {OUT_PATH}")
-        with open(OUT_PATH, "w") as outfile:
-            json.dump(out, outfile, indent=2)

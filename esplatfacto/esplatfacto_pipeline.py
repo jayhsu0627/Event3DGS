@@ -37,12 +37,14 @@ from nerfstudio.configs.base_config import InstantiateConfig
 from esplatfacto.data.base_datamanager import DataManager, DataManagerConfig, VanillaDataManager
 
 from nerfstudio.data.datamanagers.full_images_datamanager import FullImageDatamanager
+from esplatfacto.data.esplatfacto_datamanager import EventImageDatamanager
 from nerfstudio.data.datamanagers.parallel_datamanager import ParallelDataManager
 from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import profiler
 from nerfstudio.configs import base_config as cfg
 from nerfstudio.models.base_model import ModelConfig
+from nerfstudio.pipelines.base_pipeline import Pipeline as NerfstudioPipeline
 from nerfstudio.pipelines.base_pipeline import (
     VanillaPipeline,
     VanillaPipelineConfig,
@@ -64,7 +66,10 @@ def module_wrapper(ddp_or_model: Union[DDP, Model]) -> Model:
     return ddp_or_model
 
 
-class Pipeline(nn.Module):
+class Pipeline(NerfstudioPipeline):
+    # Subclassing nerfstudio's Pipeline (instead of nn.Module) makes trained models loadable by nerfstudio's
+    # eval_setup, i.e. `ns-viewer --load-config`, `ns-render`, `ns-eval` and `ns-export` no longer fail its
+    # isinstance(pipeline, Pipeline) check. All methods below still override the nerfstudio ones.
     """The intent of this class is to provide a higher level interface for the Model
     that will be easy to use for our Trainer class.
 
@@ -136,7 +141,7 @@ class Pipeline(nn.Module):
             else:
                 raise
 
-        super().load_state_dict(pipeline_state, strict=False)
+        nn.Module.load_state_dict(self, pipeline_state, strict=False)  # not nerfstudio's Pipeline.load_state_dict
 
     @profiler.time_function
     def get_train_loss_dict(self, step: int):
@@ -379,7 +384,9 @@ class EsplatPipeline(Pipeline):
         """
         self.eval()
         metrics_dict_list = []
-        assert isinstance(self.datamanager, (VanillaDataManager, ParallelDataManager, FullImageDatamanager))
+        assert isinstance(
+            self.datamanager, (VanillaDataManager, ParallelDataManager, FullImageDatamanager, EventImageDatamanager)
+        )
         num_images = len(self.datamanager.fixed_indices_eval_dataloader)
         if output_path is not None:
             output_path.mkdir(exist_ok=True, parents=True)

@@ -137,7 +137,68 @@ class EventImageDatamanager(DataManager, Generic[TDataset]):
         self.eval_unseen_cameras = [i for i in range(len(self.eval_dataset))]
         assert len(self.train_unseen_cameras) > 0, "No data found in dataset"
 
+        self.event_meta = self.train_dataparser_outputs.metadata.get("events")
+        if self.event_meta is None:
+            raise RuntimeError(
+                "No 'events' block in transforms.json. Re-run `python dataloader.py -p <root> -s <scene>`: "
+                "the old pre-processing wrote min-max scaled event images, which are not valid targets."
+            )
+        self._setup_events()
+
         super().__init__()
+
+    def _setup_events(self):
+        """Pre-compute cumulative per-pixel event sums at every pose time.
+
+        cum[k] = sum over events with t <= T_k of (polarity + polarity_offset), so the events in the window
+        (T_j, T_i] are cum[i] - cum[j]. Any window can then be formed in O(H*W) per iteration, and a new
+        random window length is drawn every iteration (as in EventNeRF), instead of fixing one window per frame.
+        Events with t <= T_0 (the synthetic "shutter" burst from the simulator's initial gray frame) never
+        enter a window.
+        """
+        meta = self.event_meta
+        data = np.load(meta["path"])
+        x, y, t, p = (np.asarray(data[k]) for k in ("x", "y", "t", "p"))
+        order = np.argsort(t, kind="stable")
+        x, y, t, p = x[order].astype(np.int64), y[order].astype(np.int64), t[order].astype(np.float64), p[order]
+        p = p.astype(np.float32)
+        if set(np.unique(p).tolist()) <= {0.0, 1.0}:
+            p = p * 2 - 1
+        cams = self.train_dataset.cameras
+        H, W = int(cams.height[0]), int(cams.width[0])
+        n = len(self.train_dataset)
+        assert meta["frame_indices"] == list(range(n)), "event training needs every pose, in time order"
+        times = np.asarray(meta["frame_times"]) if meta.get("frame_times") else np.linspace(0, t.max(), n)
+        bins = np.searchsorted(times, t, side="left")  # event in (T_{k-1}, T_k] -> bin k
+        flat = bins * (H * W) + y * W + x
+        weights = p + float(meta.get("polarity_offset", 0.0))
+        per_bin = np.bincount(flat, weights=weights, minlength=n * H * W).astype(np.float32).reshape(n, H, W)
+        self.event_cumsum = torch.from_numpy(np.cumsum(per_bin, axis=0)).to(self.device)
+        self.num_poses = n
+        self.event_cycle = bool(meta.get("cycle", False))
+        # For a closed orbit the last pose duplicates the first one.
+        self.event_period = n - 1 if self.event_cycle else n
+        self.max_winsize = int(meta.get("max_winsize", 50))
+        CONSOLE.log(
+            f"Events: {len(t)} events over {n} poses ({H}x{W}), cycle={self.event_cycle}, "
+            f"max_winsize={self.max_winsize}, polarity_offset={meta.get('polarity_offset', 0.0)}"
+        )
+
+    def sample_event_window(self) -> Tuple[int, int, torch.Tensor]:
+        """Returns (start_pose, end_pose, signed event image of the window (start, end])."""
+        w = random.randint(1, self.max_winsize)
+        if self.event_cycle:
+            end = random.randrange(self.event_period)
+            start = (end - w) % self.event_period
+        else:
+            end = random.randrange(1, self.num_poses)
+            start = max(end - w, 0)
+        c = self.event_cumsum
+        if start < end:
+            events = c[end] - c[start]
+        else:  # wraps around the closed orbit: (T_start, T_last] + (T_0, T_end]
+            events = (c[self.event_period] - c[start]) + (c[end] - c[0])
+        return start, end, events
 
     @cached_property
     def cached_train(self) -> List[Dict[str, torch.Tensor]]:
@@ -293,49 +354,25 @@ class EventImageDatamanager(DataManager, Generic[TDataset]):
     def next_train(self, step: int) -> Tuple[Cameras, Dict]:
         """Returns the next training batch
 
-        Returns a Camera instead of raybundle
-        Add t0 output for last frame. """
-        image_idx = self.train_unseen_cameras.pop(random.randint(0, len(self.train_unseen_cameras) - 1))
-        # Make sure to re-populate the unseen cameras list if we have exhausted it
-        if len(self.train_unseen_cameras) == 0:
-            self.train_unseen_cameras = [i for i in range(len(self.train_dataset))]
-
-        data = deepcopy(self.cached_train[image_idx])
-        data["image"] = data["image"].to(self.device)
-
+        Returns the camera at the end of a randomly sampled event window, the camera at its start (t_0), and
+        the signed event image of the window. Both cameras come from the same, singly-normalised trajectory."""
+        start, end, events = self.sample_event_window()
         assert len(self.train_dataset.cameras.shape) == 1, "Assumes single batch dimension"
-        camera = self.train_dataset.cameras[image_idx : image_idx + 1].to(self.device)
-        
-        # print(self.train_dataset.cameras)
-        # print(self.train_dataset.pre_cameras)
-
-        camera_pre = self.train_dataset.pre_cameras[image_idx : image_idx + 1].to(self.device) # Load pre_camera matrix from datasets
-
-        if camera.metadata is None:
-            camera.metadata = {}
-        if camera_pre.metadata is None:
-            camera_pre.metadata = {}
-
-        camera.metadata["cam_idx"] = image_idx
-        camera_pre.metadata["cam_idx"] = image_idx
-
+        camera = self.train_dataset.cameras[end : end + 1].to(self.device)
+        camera_pre = self.train_dataset.cameras[start : start + 1].to(self.device)
+        for cam, idx in ((camera, end), (camera_pre, start)):
+            if cam.metadata is None:
+                cam.metadata = {}
+            cam.metadata["cam_idx"] = idx
+        data = {"events": events, "image_idx": end, "pre_image_idx": start}
         return camera, camera_pre, data
 
     def next_eval(self, step: int) -> Tuple[Cameras, Dict]:
         """Returns the next evaluation batch
 
-        Returns a Camera instead of raybundle"""
-        image_idx = self.eval_unseen_cameras.pop(random.randint(0, len(self.eval_unseen_cameras) - 1))
-        # Make sure to re-populate the unseen cameras list if we have exhausted it
-        if len(self.eval_unseen_cameras) == 0:
-            self.eval_unseen_cameras = [i for i in range(len(self.eval_dataset))]
-        data = deepcopy(self.cached_eval[image_idx])
-        data["image"] = data["image"].to(self.device)
-        assert len(self.eval_dataset.cameras.shape) == 1, "Assumes single batch dimension"
-        camera = self.eval_dataset.cameras[image_idx : image_idx + 1].to(self.device)
-        camera_pre = self.eval_dataset.pre_cameras[image_idx : image_idx + 1].to(self.device)
-
-        return camera, camera_pre, data
+        Event windows have no held-out split (every event belongs to some training window), so this
+        just draws another random window."""
+        return self.next_train(step)
 
     def next_eval_image(self, step: int) -> Tuple[Cameras, Dict]:
         """Returns the next evaluation batch
