@@ -106,9 +106,15 @@ python scripts/eval_gt.py --load-config outputs/output/esplatfacto/<timestamp>/c
 - During training, you can use the crop scale in crop viewport to locate the noisy 3DGS model.
 
 
-| Lego (Synthetic)                            | Sew (Real)                           |
-|-----------------------------------|-----------------------------------|
-| ![Image 1](./img/lego_splatfacto_big.png)    | ![Image 2](./img/sew_splatfacto_big_no_diff.png)    |
+v0.5 results after 30k iterations: renders from three training-ring poses (top) and their accumulated opacity (bottom; black = empty space, so haze would show up as grey).
+
+| Lego (synthetic) | Drums (synthetic) |
+|---|---|
+| ![lego](./img/v05_lego.png) | ![drums](./img/v05_drums.png) |
+
+| Sewing (real) |
+|---|
+| ![sewing](./img/v05_sewing.png) |
 
 
 ## Known Issues and TODOs
