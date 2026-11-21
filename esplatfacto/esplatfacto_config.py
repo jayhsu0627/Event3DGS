@@ -32,8 +32,8 @@ esplatfacto_method = MethodSpecification(
         steps_per_eval_image=100,
         steps_per_eval_batch=0,
         steps_per_save=2000,
-        steps_per_eval_all_images=1000,
-        max_num_iterations=250000,
+        steps_per_eval_all_images=5000,
+        max_num_iterations=30000,
         mixed_precision=False,
         pipeline=EsplatPipelineConfig(
             datamanager=EventImageDatamanagerConfig(
@@ -47,7 +47,7 @@ esplatfacto_method = MethodSpecification(
                 "optimizer": AdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
                     lr_final=1.6e-6,
-                    max_steps=250000,
+                    max_steps=30000,
                 ),
             },
             "features_dc": {
@@ -70,7 +70,7 @@ esplatfacto_method = MethodSpecification(
             "camera_opt": {
                 "optimizer": AdamOptimizerConfig(lr=1e-4, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
-                    lr_final=5e-7, max_steps=250000, warmup_steps=1000, lr_pre_warmup=0),
+                    lr_final=5e-7, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0),
                 },
         },
         viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
@@ -85,8 +85,8 @@ esplatfacto_method_big = MethodSpecification(
         steps_per_eval_image=100,
         steps_per_eval_batch=0,
         steps_per_save=2000,
-        steps_per_eval_all_images=1000,
-        max_num_iterations=250000,
+        steps_per_eval_all_images=5000,
+        max_num_iterations=30000,
         mixed_precision=False,
         pipeline=EsplatPipelineConfig(
             datamanager=EventImageDatamanagerConfig(
@@ -104,7 +104,7 @@ esplatfacto_method_big = MethodSpecification(
                 "optimizer": AdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
                     lr_final=1.6e-6,
-                    max_steps=250000,
+                    max_steps=30000,
                 ),
             },
             "features_dc": {
@@ -127,7 +127,7 @@ esplatfacto_method_big = MethodSpecification(
             "camera_opt": {
                 "optimizer": AdamOptimizerConfig(lr=1e-4, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
-                    lr_final=5e-7, max_steps=250000, warmup_steps=1000, lr_pre_warmup=0
+                    lr_final=5e-7, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
                 ),
             },
         },
@@ -144,8 +144,8 @@ esplatfacto_method_lite = MethodSpecification(
         steps_per_eval_image=100,
         steps_per_eval_batch=0,
         steps_per_save=2000,
-        steps_per_eval_all_images=1000,
-        max_num_iterations=250000,
+        steps_per_eval_all_images=5000,
+        max_num_iterations=30000,
         mixed_precision=False,
         pipeline=EsplatPipelineConfig(
             datamanager=EventImageDatamanagerConfig(
@@ -159,7 +159,7 @@ esplatfacto_method_lite = MethodSpecification(
                 "optimizer": AdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
                     lr_final=1.6e-6,
-                    max_steps=250000,
+                    max_steps=30000,
                 ),
             },
             "features_dc": {
@@ -182,7 +182,7 @@ esplatfacto_method_lite = MethodSpecification(
             "camera_opt": {
                 "optimizer": AdamOptimizerConfig(lr=1e-4, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
-                    lr_final=5e-7, max_steps=300000, warmup_steps=1000, lr_pre_warmup=0
+                    lr_final=5e-7, max_steps=30000, warmup_steps=1000, lr_pre_warmup=0
                 ),
             },
         },

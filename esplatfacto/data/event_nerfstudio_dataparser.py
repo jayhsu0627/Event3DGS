@@ -107,9 +107,19 @@ class Nerfstudio(DataParser):
         mask_filenames = []
         depth_filenames = []
         poses = []
-        pre_poses = []
 
         pre_camera = [] # store the order of the pre_camera frame (t_0)
+
+        # Datasets written by the current dataloader.py carry an "events" block. Their poses are already in
+        # a fixed, metric z-up frame (the scene bound is expressed in it), so we must not re-orient/re-scale.
+        event_meta = meta.get("events")
+        if event_meta is not None:
+            self.downscale_factor = 1  # event targets live at sensor resolution (Bayer layout)
+        else:
+            CONSOLE.print(
+                "[bold yellow]transforms.json has no 'events' block: it was written by the old dataloader.py, "
+                "whose min-max scaled event images are not valid supervision. Re-run dataloader.py."
+            )
 
         fx_fixed = "fl_x" in meta
         fy_fixed = "fl_y" in meta
@@ -178,7 +188,7 @@ class Nerfstudio(DataParser):
 
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
-            pre_camera.append(frame["pre_camera"])
+            pre_camera.append(frame.get("pre_camera", len(pre_camera)))
 
             if "mask_path" in frame:
                 mask_filepath = Path(frame["mask_path"])
@@ -216,6 +226,13 @@ class Nerfstudio(DataParser):
             indices = np.array(indices, dtype=np.int32)
         elif has_split_files_spec:
             raise RuntimeError(f"The dataset's list of filenames for split {split} is missing.")
+        elif event_meta is not None:
+            # Event windows can end at any pose, so every pose is a training camera (in time order).
+            # The eval split is just a sparse set of views for rendering/visualisation.
+            if split == "train":
+                indices = np.arange(len(image_filenames))
+            else:
+                indices = np.arange(0, len(image_filenames), max(1, len(image_filenames) // 40))
         else:
             # find train and eval indices based on the eval_mode specified
             if self.config.eval_mode == "fraction":
@@ -245,16 +262,19 @@ class Nerfstudio(DataParser):
         else:
             orientation_method = self.config.orientation_method
 
+        center_method = "none" if event_meta is not None else self.config.center_method
+        auto_scale_poses = self.config.auto_scale_poses and event_meta is None
+
         poses = torch.from_numpy(np.array(poses).astype(np.float32))
         poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
             poses,
             method=orientation_method,
-            center_method=self.config.center_method,
+            center_method=center_method,
         )
 
         # Scale poses
         scale_factor = 1.0
-        if self.config.auto_scale_poses:
+        if auto_scale_poses:
             scale_factor /= float(torch.max(torch.abs(poses[:, :3, 3])))
         scale_factor *= self.config.scale_factor
 
@@ -265,42 +285,16 @@ class Nerfstudio(DataParser):
         mask_filenames = [mask_filenames[i] for i in indices] if len(mask_filenames) > 0 else []
         depth_filenames = [depth_filenames[i] for i in indices] if len(depth_filenames) > 0 else []
 
-        ###### Reordering for pre_cameras ######
-        # pre_poses = torch.empty_like(poses)  # record poses
-        # num, m, n = poses.shape
+        ###### pre_cameras (t_0) ######
+        # The t_0 camera of frame k is simply another pose of the same trajectory. It must live in exactly the
+        # same normalised frame as the t cameras. (Previously the t_0 poses were re-oriented, re-centred and
+        # re-scaled on their own, which shifted the same physical camera by ~1% of the orbit radius, i.e. a few
+        # pixels, between the two renders that are differenced.)
+        pre_poses = poses[torch.tensor(pre_camera, dtype=torch.long)]
 
-        
-        # pre_camera.append(frame["pre_camera"])
-
-        for i in pre_camera:
-            pre_poses.append(np.array(frames[i]["transform_matrix"]))
-            # pre_poses[i] = poses[i-1]
-            # print(i-1)
-            # pre_poses[(i-1)//100] = poses[(i-1)//100]
-
-        pre_poses = torch.from_numpy(np.array(pre_poses).astype(np.float32))
-        pre_poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
-            pre_poses,
-            method=orientation_method,
-            center_method=self.config.center_method,
-        )
-
-        # Scale pre_poses
-        scale_factor = 1.0
-        if self.config.auto_scale_poses:
-            scale_factor /= float(torch.max(torch.abs(pre_poses[:, :3, 3])))
-        scale_factor *= self.config.scale_factor
-
-        pre_poses[:, :3, 3] *= scale_factor
-
-        ###### -------------------------- ######
-        # print("before:",len(poses))
         idx_tensor = torch.tensor(indices, dtype=torch.long)
         poses = poses[idx_tensor]
         pre_poses = pre_poses[idx_tensor]
-        # print("after:",len(poses))
-        print(idx_tensor)
-        print(pre_camera)
 
         # in x,y,z order
         # assumes that the scene is centered at the origin
@@ -407,6 +401,12 @@ class Nerfstudio(DataParser):
 
         # reinitialize metadata for dataparser_outputs
         metadata = {}
+        if event_meta is not None:
+            event_meta = dict(event_meta)
+            event_meta["path"] = str((data_dir / event_meta["path"]).resolve())
+            event_meta["frame_times"] = [float(f["time"]) for f in frames] if "time" in frames[0] else None
+            event_meta["frame_indices"] = [int(i) for i in indices]
+            metadata["events"] = event_meta
 
         # _generate_dataparser_outputs might be called more than once so we check if we already loaded the point cloud
         try:
