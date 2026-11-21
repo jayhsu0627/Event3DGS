@@ -9,7 +9,7 @@ Train 3D Gaussian Splatting from event-camera data, as a [nerfstudio](https://do
 
 ## Updates
 
-- **Unreleased:** ported to nerfstudio 1.1.5 and gsplat 1.4.0 (`ESplatfactoModel` now subclasses `SplatfactoModel`; `ns-export` works); lego 29.1 dB, drums 31.0 dB PSNR. Custom-data support ([docs/CUSTOM_DATA.md](docs/CUSTOM_DATA.md): any sensor size, `intrinsics.txt`, `timestamps.txt`, world up-axis, scale normalisation) and `.ply` export.
+- **2026-11-20, v0.6:** ported to nerfstudio 1.1.5 and gsplat 1.4.0 (`ESplatfactoModel` now subclasses `SplatfactoModel`; `ns-export` works); lego 29.1 dB, drums 31.0 dB PSNR. Custom-data support ([docs/CUSTOM_DATA.md](docs/CUSTOM_DATA.md): any sensor size, `intrinsics.txt`, `timestamps.txt`, world up-axis, scale normalisation) and `.ply` export.
 - **2026-11-20, v0.5:** training recipe aligned with the official Event3DGS implementation; background haze removed. Lego 28.9 dB, drums 30.9 dB PSNR.
 - **2026-11-20, v0.4:** fixed the event-supervision bugs behind the v0.32 floaters.
 - **2024-11-08, v0.32:** first public release.
@@ -31,13 +31,11 @@ Open the viewer at `http://localhost:7007` while it trains. On an RTX PRO 6000, 
 
 Renders at three azimuths, level with the training ring and pulled back 15-30% so the whole object fits (top), and their opacity (bottom; black is empty space, so haze would show as grey), after 30k iterations.
 
-| Lego (synthetic) | Drums (synthetic) |
+| Scene | Renders (top) and opacity (bottom) |
 |---|---|
-| ![lego](./img/results_lego.png) | ![drums](./img/results_drums.png) |
-
-| Sewing (real) |
-|---|
-| ![sewing](./img/results_sewing.png) |
+| Lego (synthetic) | ![lego](./img/results_lego.png) |
+| Drums (synthetic) | ![drums](./img/results_drums.png) |
+| Sewing (real) | ![sewing](./img/results_sewing.png) |
 
 PSNR / SSIM / LPIPS on the 99 EventNeRF ground-truth views (log-affine colour alignment; ESplat: mean ± std over 3 training runs, seeds 42, 1, 2):
 

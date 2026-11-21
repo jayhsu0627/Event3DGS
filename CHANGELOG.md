@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.6 (2026-11-20): nerfstudio 1.1.5 port, custom data, export
 
 - Ported to nerfstudio 1.1.5 and gsplat 1.4.0. `ESplatfactoModel` subclasses nerfstudio's `SplatfactoModel` and overrides only the event-specific parts (two renders per event window, both feeding densification; event loss; bound clipping; dataset background), so `esplatfacto.py` shrinks from 1043 to 310 lines and `ns-export gaussian-splat` accepts the model. Densification uses gsplat's `DefaultStrategy` with the 3DGS thresholds; Splatfacto's pause of `num_train_data` steps after each opacity reset and its training-time clamp are still disabled. Over seeds 42, 1, 2: lego 29.14 ± 0.08 dB / LPIPS 0.045 (v0.5 stack: 28.91 ± 0.16 / 0.048), drums 30.97 ± 0.02 dB / 0.040 (30.89 ± 0.08 / 0.040), about 8% fewer Gaussians, same off-orbit opacity; sewing (real) keeps its off-orbit opacity (0.14-0.16). README figures are regenerated from the ported models.
 - Custom data (`dataloader.py`, [docs/CUSTOM_DATA.md](docs/CUSTOM_DATA.md)): sensor size (`--width/--height`), intrinsics from `intrinsics.txt` or `--fx/--fy/--cx/--cy`, non-uniform pose times from `timestamps.txt`, pose world up-axis (`--world-up`), and `--normalize` to bring any capture to the scale the model's thresholds assume. Input checks for event coordinates, polarities, pose matrices and timestamp units. With explicit intrinsics, `--type` selects only the event settings. EventNeRF scenes preprocess to identical `transforms.json` files as before.
