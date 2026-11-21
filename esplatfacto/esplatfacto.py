@@ -115,8 +115,8 @@ class ESplatfactoModelConfig(ModelConfig):
     # cull_alpha_thresh: float = 0.1
     cull_alpha_thresh: float = 0.005
     """threshold of opacity for culling gaussians. One can set it to a lower value (e.g. 0.005) for higher quality."""
-    cull_scale_thresh: float = 0.5
-    """threshold of scale for culling huge gaussians"""
+    cull_scale_thresh: float = 0.1
+    """threshold of scale for culling huge gaussians. 3DGS uses 0.1 x camera extent; the EventNeRF ring has radius 0.9."""
     # continue_cull_post_densification: bool = True
     continue_cull_post_densification: bool = False
     """If True, continue to cull gaussians post refinement"""
@@ -130,13 +130,12 @@ class ESplatfactoModelConfig(ModelConfig):
     """number of samples to split gaussians into"""
     sh_degree_interval: int = 1000
     """every n intervals turn on another sh degree"""
-    cull_screen_size: float = 0.15
-    # cull_screen_size: float = 0.07
-    """if a gaussian is more than this percent of screen space, cull it"""
+    cull_screen_size: float = 0.058
+    """if a gaussian's screen radius exceeds this fraction of the image width, cull it (3DGS: 20 px at 346 px)"""
     split_screen_size: float = 0.05
     # split_screen_size: float = 0.01
     """if a gaussian is more than this percent of screen space, split it"""
-    stop_screen_size_at: int = 4000
+    stop_screen_size_at: int = 15000
     """stop culling/splitting at this step WRT screen size of gaussians"""
     random_init: bool = False
     """whether to initialize the positions uniformly randomly (not SFM points)"""
@@ -144,19 +143,21 @@ class ESplatfactoModelConfig(ModelConfig):
     """Number of gaussians to initialize if random init is used"""
     random_scale: float = 10.0
     "Size of the cube to initialize random gaussians within"
-    ssim_lambda: float = 0.0
-    """weight of the SSIM term on the (signed, sparse) event maps; EventNeRF uses a pure MSE loss"""
+    ssim_lambda: float = 0.2
+    """weight of the D-SSIM term on the Bayer-masked event maps (official Event3DGS: 0.2)"""
     event_threshold: Optional[float] = None
     """contrast threshold C (log-intensity change per event). None: use the value in transforms.json."""
     tonemap_eps: Optional[float] = None
     """eps in log(rgb**gamma + eps). None: use the value in transforms.json (EventNeRF: 0.1 synthetic, 1e-5 real)."""
     event_gamma: float = 2.2
     """rendered colours are display values; rgb**gamma converts them to linear intensity (as in EventNeRF)"""
-    event_loss: Literal["mse", "l1"] = "mse"
+    event_loss: Literal["mse", "l1"] = "l1"
     """per-pixel penalty between the rendered log-intensity change and C * accumulated events"""
     clip_to_bound: bool = True
     """Gaussian analogue of EventNeRF's density clipping: Gaussians whose centre leaves the scene bound
     (transforms.json events.bound) are invisible and get culled at every refinement step."""
+    rand_ratio: float = 0.7
+    """fraction of pixels kept in the event loss each step (official Event3DGS README: 0.7; 1.0 keeps all)"""
     opacity_reg: float = 0.0
     """weight of an L1 penalty on opacities (pushes Gaussians that explain no events towards transparency)"""
     stop_split_at: int = 15000
@@ -475,11 +476,10 @@ class ESplatfactoModel(Model):
             # save checkpoints right when the opacity is reset (saves every 2k)
             # then cull
             # only split/cull if we've seen every image since opacity reset
+            # 3DGS schedule: densify every refine_every steps until stop_split_at. Every frame is a training
+            # camera here, so splatfacto's "seen every image since the reset" gate would skip ~1100 steps per cycle.
             reset_interval = self.config.reset_alpha_every * self.config.refine_every
-            do_densification = (
-                self.step < self.config.stop_split_at
-                and self.step % reset_interval > self.num_train_data + self.config.refine_every
-            )
+            do_densification = self.step < self.config.stop_split_at
             if do_densification:
                 # then we densify
                 assert self.xys_grad_norm is not None and self.vis_counts is not None and self.max_2Dsize is not None
@@ -866,7 +866,9 @@ class ESplatfactoModel(Model):
             return_alpha=True,
         )  # type: ignore
         alpha = alpha[..., None]
-        rgb = torch.clamp(rgb, max=1.0)  # type: ignore
+        if not self.training:
+            # Clamping during training would zero the event-loss gradient of every pixel above 1.
+            rgb = torch.clamp(rgb, max=1.0)  # type: ignore
         depth_im = None
         if self.config.output_depth_during_training or not self.training:
             depth_im = rasterize_gaussians(  # type: ignore
@@ -939,6 +941,15 @@ class ESplatfactoModel(Model):
         target = batch["events"].to(self.device) * self.event_threshold
         return target if like.dim() == 2 else target[..., None].expand_as(like)
 
+    def loss_view(self, pred: torch.Tensor, target: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """(H, W, 3) maps as the official Event3DGS loss sees them: each pixel only in its Bayer channel,
+        on a random rand_ratio subset of pixels."""
+        if pred.dim() == 2:
+            m = self.bayer_mask(*pred.shape)
+            pred, target = pred[..., None] * m, target[..., None] * m
+        keep = (torch.rand(pred.shape[:2], device=self.device) < self.config.rand_ratio).to(pred.dtype)[..., None]
+        return pred * keep, target * keep
+
     def get_metrics_dict(self, outputs, outputs_pre, batch) -> Dict[str, torch.Tensor]:
         """Compute and returns metrics.
 
@@ -967,12 +978,12 @@ class ESplatfactoModel(Model):
         """
         pred = self.event_prediction(outputs["rgb"], outputs_pre["rgb"])
         target = self.event_target(batch, pred)
+        pred, target = self.loss_view(pred, target)
         err = pred - target
         Ll1 = err.pow(2).mean() if self.config.event_loss == "mse" else err.abs().mean()
         if self.config.ssim_lambda > 0:
-            p = pred[None, None] if pred.dim() == 2 else pred.permute(2, 0, 1)[None]
-            t = target[None, None] if target.dim() == 2 else target.permute(2, 0, 1)[None]
-            simloss = 1 - SSIM(data_range=1.0, size_average=True, channel=p.shape[1])(p, t)
+            p, t = pred.permute(2, 0, 1)[None], target.permute(2, 0, 1)[None]
+            simloss = 1 - SSIM(data_range=1.0, size_average=True, channel=3)(p, t)
         else:
             simloss = torch.zeros((), device=self.device)
 

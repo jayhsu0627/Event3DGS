@@ -89,7 +89,9 @@ Useful flags: `--bound {auto,eventnerf,none,"r,z_min,z_max"}` (scene bounding cy
 ns-train esplatfacto --data data/lego/output
 ```
 
-Event-specific model options (all have dataset-derived defaults): `--pipeline.model.event-threshold`, `--pipeline.model.tonemap-eps`, `--pipeline.model.event-loss {mse,l1}`, `--pipeline.model.clip-to-bound {True,False}`, `--pipeline.model.opacity-reg 0.01`, `--pipeline.model.background-color {dataset,random,black,white}`.
+Event-specific model options (all have dataset-derived defaults): `--pipeline.model.event-threshold`, `--pipeline.model.tonemap-eps`, `--pipeline.model.event-gamma` (2.2 = EventNeRF `log(I^2.2+eps)`, 1.0 = official Event3DGS `log(I+eps)`), `--pipeline.model.event-loss {l1,mse}`, `--pipeline.model.ssim-lambda`, `--pipeline.model.rand-ratio`, `--pipeline.model.clip-to-bound {True,False}`, `--pipeline.model.opacity-reg 0.01`, `--pipeline.model.background-color {dataset,random,black,white}`.
+
+Always pass `--experiment-name <scene>`: every preprocessed scene folder is called `output`, so default run names collide.
 
 ## Evaluate against EventNeRF ground truth
 
@@ -131,6 +133,24 @@ AssertionError
   5. Random init filled a [-5,5]^3 cube although the cameras sit at radius ~1, and nothing removed Gaussians outside the object. Init now samples the scene bound, and Gaussians leaving it are made invisible and culled (Density Clipping, A.2 of EventNeRF); the bound is estimated from event activity.
   6. The t0 cameras were re-oriented / re-centred / re-scaled separately from the t cameras, shifting the same camera by a few pixels between the two renders being differenced.
   7. The event map was demosaiced (hallucinated colours) instead of masking the loss per pixel with the RGGB pattern; densification only used gradients of the t0 render; event windows were off by one frame and fixed once per frame (now resampled every iteration); training crashed at step 1000 (`get_average_eval_image_metrics` assert); the pipeline did not subclass nerfstudio's `Pipeline`, so `ns-viewer --load-config` / `ns-render` refused trained models.
+
+- [x] Haze and missing detail (v0.5). The training recipe now follows the [official Event3DGS implementation](https://github.com/tyxiong23/Event3DGS); the remaining v0.4 haze came from splatfacto defaults that do not fit event data:
+  1. Densification was gated by splatfacto's "every image seen since the last opacity reset" rule. Every one of the 1001 frames is a training camera here, so densification and opacity pruning were off for 1100 of every 3000 steps (and before step 1200). It now runs every 100 steps from step 500 to 15k, as in 3DGS.
+  2. The training render was clamped at 1.0, which zeroed the event-loss gradient of every saturated pixel. The clamp now applies at evaluation only.
+  3. Culling thresholds were splatfacto's (world size 0.5, screen radius ~52 px, screen-size culling until step 4k), loose enough for blobs larger than the object to survive as background-coloured haze. They are now the 3DGS values: 0.1 x camera extent, 20 px, until step 15k.
+  4. The loss was MSE on the channel-summed event map. It is now the official L1 + 0.2 D-SSIM on the Bayer-masked three-channel maps, on a random 70% of pixels per step (`rand-ratio`), which also restores the scale the 3DGS densification threshold (2e-4) was tuned for.
+  5. A leftover v0.32 preprocessing class in the dataparser imported `bm4d` / `colour_demosaicing`; it was unused and is removed.
+
+  This version is a hybrid: the official training recipe, with this repo's event binning kept where measurements favour it. Accumulating the events of a window as (T_j, T_i] instead of the official [T_j, T_i) predicts the recorded events from consecutive GT views clearly better (Pearson r 0.870 vs 0.793 on lego, 0.911 vs 0.811 on drums, under the same tonemap), and windows are resampled every iteration rather than fixed at load.
+
+  Results at 30k iterations (PSNR / SSIM / LPIPS from `scripts/eval_gt.py`, log-affine colour alignment, 99 GT views):
+
+  | Scene | v0.4 | v0.5 | EventNeRF renders, same metric |
+  |---|---|---|---|
+  | lego | 25.70 / 0.938 / 0.067 | **28.81 / 0.939 / 0.049** | 25.82 / 0.893 / 0.137 |
+  | drums | 25.81 / 0.954 / 0.057 | **30.82** / 0.952 / **0.040** | 28.43 / 0.924 / 0.057 |
+
+  Off-orbit (±30°) mean alpha fell from 0.82-0.84 to 0.35-0.39 on lego and from 0.56-0.62 to 0.24-0.26 on drums. The lego baseplate stays translucent from above because every training camera is level with it.
 
   Note: with torch >= 2.6, nerfstudio 1.0.3 cannot load its own checkpoints (`torch.load` now defaults to `weights_only=True`). Prefix viewer/render commands with `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`, e.g. `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 ns-viewer --load-config outputs/.../config.yml` (`scripts/eval_gt.py` handles this itself).
 
