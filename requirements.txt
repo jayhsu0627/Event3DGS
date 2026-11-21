@@ -1,8 +1,8 @@
 --extra-index-url https://download.pytorch.org/whl/cu128
 torch==2.8.0
 torchvision==0.23.0
-nerfstudio==1.0.3
-gsplat==0.1.10
+nerfstudio==1.1.5
+gsplat==1.4.0
 numpy<2
 ninja
 setuptools<81

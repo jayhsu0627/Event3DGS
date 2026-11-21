@@ -9,7 +9,7 @@ Train 3D Gaussian Splatting from event-camera data, as a [nerfstudio](https://do
 
 ## Updates
 
-- **Unreleased:** custom-data support ([docs/CUSTOM_DATA.md](docs/CUSTOM_DATA.md): any sensor size, `intrinsics.txt`, `timestamps.txt`, world up-axis, scale normalisation) and `.ply` export.
+- **Unreleased:** ported to nerfstudio 1.1.5 and gsplat 1.4.0 (`ESplatfactoModel` now subclasses `SplatfactoModel`; `ns-export` works); lego 29.1 dB, drums 31.0 dB PSNR. Custom-data support ([docs/CUSTOM_DATA.md](docs/CUSTOM_DATA.md): any sensor size, `intrinsics.txt`, `timestamps.txt`, world up-axis, scale normalisation) and `.ply` export.
 - **2026-11-20, v0.5:** training recipe aligned with the official Event3DGS implementation; background haze removed. Lego 28.9 dB, drums 30.9 dB PSNR.
 - **2026-11-20, v0.4:** fixed the event-supervision bugs behind the v0.32 floaters.
 - **2024-11-08, v0.32:** first public release.
@@ -33,27 +33,27 @@ Renders from three training-ring poses (top) and their opacity (bottom; black is
 
 | Lego (synthetic) | Drums (synthetic) |
 |---|---|
-| ![lego](./img/v05_lego.png) | ![drums](./img/v05_drums.png) |
+| ![lego](./img/results_lego.png) | ![drums](./img/results_drums.png) |
 
 | Sewing (real) |
 |---|
-| ![sewing](./img/v05_sewing.png) |
+| ![sewing](./img/results_sewing.png) |
 
-PSNR / SSIM / LPIPS on the 99 EventNeRF ground-truth views (log-affine colour alignment; ESplat: mean ± std over 4 training runs, seeds 42, 1, 2 and a repeat of 42):
+PSNR / SSIM / LPIPS on the 99 EventNeRF ground-truth views (log-affine colour alignment; ESplat: mean ± std over 3 training runs, seeds 42, 1, 2):
 
-| Scene | ESplat v0.5 | EventNeRF renders, same metric |
+| Scene | ESplat | EventNeRF renders, same metric |
 |---|---|---|
-| lego | **28.91 ± 0.16 / 0.939 ± 0.001 / 0.048 ± 0.001** | 25.82 / 0.893 / 0.137 |
-| drums | **30.89 ± 0.08 / 0.952 ± 0.000 / 0.040 ± 0.000** | 28.43 / 0.924 / 0.057 |
+| lego | **29.14 ± 0.08 / 0.941 ± 0.000 / 0.045 ± 0.000** | 25.82 / 0.893 / 0.137 |
+| drums | **30.97 ± 0.02 / 0.954 ± 0.001 / 0.040 ± 0.000** | 28.43 / 0.924 / 0.057 |
 
-Off-orbit (±30°) mean opacity is 0.34-0.39 on lego and 0.23-0.26 on drums. The lego baseplate stays translucent from above because every training camera is level with it. `scripts/reproduce.sh` regenerates this table.
+Off-orbit (±30°) mean opacity is 0.35-0.40 on lego and 0.23-0.26 on drums. The lego baseplate stays translucent from above because every training camera is level with it. `scripts/reproduce.sh` regenerates this table.
 
 ## ESplat and the official Event3DGS
 
 | | [Official Event3DGS](https://github.com/tyxiong23/Event3DGS) | ESplat |
 |---|---|---|
-| Codebase | original 3DGS rasterizer | nerfstudio plugin (gsplat) |
-| Viewer, `ns-render`, nerfstudio configs | - | yes |
+| Codebase | original 3DGS rasterizer | nerfstudio 1.1.5 plugin, subclass of Splatfacto (gsplat 1.4.0) |
+| Viewer, `ns-render`, `ns-export`, nerfstudio configs | - | yes |
 | Progressive training, RGB appearance refinement | yes | - |
 | Training recipe (densification, culling, L1 + 0.2 D-SSIM loss) | reference | same |
 | Event window | fixed at load, events in [T_j, T_i) | resampled every step, events in (T_j, T_i] |
@@ -64,7 +64,7 @@ The event binning is kept where measurements favour it: accumulating a window's 
 
 # Installation
 
-Tested on Linux with Python 3.10, torch 2.8.0 (CUDA 12.8), nerfstudio 1.0.3 and gsplat 0.1.10:
+Tested on Linux with Python 3.10, torch 2.8.0 (CUDA 12.8), nerfstudio 1.1.5 and gsplat 1.4.0:
 
 ```
 git clone https://github.com/jayhsu0627/Event3DGS && cd Event3DGS
@@ -73,7 +73,7 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-gsplat 0.1.10 compiles its CUDA kernels on first use, so `nvcc` must be on `PATH` and `CUDA_HOME` set. On Blackwell GPUs set `TORCH_CUDA_ARCH_LIST=12.0`. `environment.yml` is the original Windows (Python 3.9, CUDA 11.8) environment.
+gsplat compiles its CUDA kernels on first use, so `nvcc` must be on `PATH` and `CUDA_HOME` set. On Blackwell GPUs set `TORCH_CUDA_ARCH_LIST=12.0`. `environment.yml` is the original Windows (Python 3.9, CUDA 11.8) environment.
 
 `ns-train -h` should list `esplatfacto`, `esplatfacto-big` and `esplatfacto-lite`.
 
@@ -127,7 +127,7 @@ Training runs 30k iterations. Always pass `--experiment-name`: every preprocesse
 | `--pipeline.model.opacity-reg` | L1 opacity penalty (default 0) |
 | `--pipeline.model.background-color {dataset,random,black,white}` | training background (default: dataset grey 159/255) |
 
-With torch >= 2.6, nerfstudio 1.0.3 cannot load its own checkpoints. Prefix viewer and render commands with `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`, e.g. `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 ns-viewer --load-config outputs/lego/esplatfacto/<timestamp>/config.yml`.
+With torch >= 2.6, nerfstudio 1.1.5 cannot load its own checkpoints. Prefix viewer and render commands with `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`, e.g. `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 ns-viewer --load-config outputs/lego/esplatfacto/<timestamp>/config.yml`.
 
 ## Evaluate
 
@@ -152,11 +152,10 @@ COMP_DATA=/path/to/comp_data bash scripts/reproduce.sh
 python scripts/export_ply.py --load-config outputs/lego/esplatfacto/<timestamp>/config.yml --out exports/lego.ply
 ```
 
-writes a standard 3DGS `.ply` (positions, SH colours, logit opacity, log scales, quaternions) that common Gaussian-splat viewers open. Gaussians outside the scene bound are dropped, since the renderer treats them as empty. nerfstudio's own `ns-export gaussian-splat` does not accept this model yet (see below).
+writes a standard 3DGS `.ply` (positions, SH colours, logit opacity, log scales, quaternions) that common Gaussian-splat viewers open. Gaussians outside the scene bound are dropped, since the renderer treats them as empty. nerfstudio's `ns-export gaussian-splat --load-config <config.yml> --output-dir exports/` also works; it additionally drops low-opacity Gaussians.
 
 # Known issues and TODOs
 
-- [ ] Port to the current nerfstudio (1.1.x) and gsplat (1.x) by subclassing `SplatfactoModel`; this also makes `ns-export gaussian-splat` accept the model (it asserts `isinstance(pipeline.model, SplatfactoModel)`).
 - [ ] Progressive training from the official implementation (a second round initialised from the high-opacity Gaussians).
 - [ ] Use EventNeRF's per-scene calibration (with distortion) for the real scenes; they currently use focal 389.25 and a centred principal point.
 - [ ] Report the official implementation's numbers on the same metric.

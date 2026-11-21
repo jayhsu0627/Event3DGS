@@ -4,9 +4,9 @@ version = "0.0.3"
 
 dependencies=[
     "numpy",
-    "gsplat==0.1.10",
+    "gsplat==1.4.0",
     "imageio",
-    "nerfstudio==1.0.3"
+    "nerfstudio==1.1.5"
 ]
 
 [tool.setuptools.packages.find]

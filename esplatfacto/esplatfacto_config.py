@@ -95,7 +95,6 @@ esplatfacto_method_big = MethodSpecification(
             ),
             model=ESplatfactoModelConfig(
                 cull_alpha_thresh=0.005,
-                continue_cull_post_densification=False,
                 densify_grad_thresh=0.0006,
             ),
         ),
