@@ -29,7 +29,7 @@ Open the viewer at `http://localhost:7007` while it trains. On an RTX PRO 6000, 
 
 ## Results
 
-Renders from three training-ring poses (top) and their opacity (bottom; black is empty space, so haze would show as grey), after 30k iterations.
+Renders at three azimuths, level with the training ring and pulled back 15-30% so the whole object fits (top), and their opacity (bottom; black is empty space, so haze would show as grey), after 30k iterations.
 
 | Lego (synthetic) | Drums (synthetic) |
 |---|---|
