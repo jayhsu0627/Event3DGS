@@ -1,0 +1,39 @@
+# Changelog
+
+## v0.5 (2026-11-20): official training recipe
+
+The training recipe follows the [official Event3DGS implementation](https://github.com/tyxiong23/Event3DGS). The haze left in v0.4 came from splatfacto defaults that do not fit event data:
+
+1. Densification was gated by splatfacto's "every image seen since the last opacity reset" rule. Every one of the 1001 frames is a training camera, so densification and opacity pruning were off for 1100 of every 3000 steps (and before step 1200). It now runs every 100 steps from step 500 to 15k, as in 3DGS.
+2. The training render was clamped at 1.0, which zeroed the event-loss gradient of every saturated pixel. The clamp now applies at evaluation only.
+3. Culling thresholds were splatfacto's (world size 0.5, screen radius ~52 px, screen-size culling until step 4k), loose enough for blobs larger than the object to survive as background-coloured haze. They are now the 3DGS values: 0.1 x camera extent, 20 px, until step 15k.
+4. The loss was MSE on the channel-summed event map. It is now the official L1 + 0.2 D-SSIM on the Bayer-masked three-channel maps, on a random 70% of pixels per step, which also restores the scale the 3DGS densification threshold (2e-4) was tuned for.
+5. An unused v0.32 preprocessing class that imported `bm4d` / `colour_demosaicing` is removed.
+
+Effect of each change on lego (single seed): the culling thresholds give most of the PSNR gain (25.9 to 28.8 dB) and cut off-orbit opacity about 3x; the L1 + D-SSIM loss raises the Gaussian count from 6.5k to 209k and lowers LPIPS from 0.087 to 0.049.
+
+| Scene | v0.4 | v0.5 |
+|---|---|---|
+| lego | 25.70 / 0.938 / 0.067 | 28.81 / 0.939 / 0.049 |
+| drums | 25.81 / 0.954 / 0.057 | 30.82 / 0.952 / 0.040 |
+
+## v0.4 (2026-11-20): event supervision
+
+The floaters of v0.32 came mostly from how events were turned into supervision:
+
+1. Event frames were min-max rescaled to 0-255, so pixels without events got a target of ~0.5 (lego) / ~0.3 (sewing) instead of 0, with a different offset and gain per frame. Targets are now `C * (signed event count + polarity offset)`.
+2. The loss compared the linear RGB difference of the two renders; events measure the change of log intensity. It now differences `log(rgb^2.2 + eps)`, as in EventNeRF.
+3. The two renders of a pair each drew their own random background, so every background pixel of the difference was noise. Both now use the dataset background (159/255).
+4. `dataloader.py` hard-coded `is_real=True`, so synthetic scenes got the real camera's focal length (389.25 instead of 480.55).
+5. Random init filled a [-5,5]^3 cube although the cameras sit at radius ~1, and nothing removed Gaussians outside the object. Init now samples the scene bound, estimated from event activity, and Gaussians leaving it are made invisible and culled (Density Clipping, EventNeRF A.2).
+6. The t0 cameras were re-oriented, re-centred and re-scaled separately from the t cameras, shifting the same camera by a few pixels between the two renders being differenced.
+7. The event map was demosaiced instead of masking the loss per pixel with the RGGB pattern; densification used only the t0 render's gradients; event windows were off by one frame and fixed once per frame; training crashed at step 1000; the pipeline did not subclass nerfstudio's `Pipeline`, so `ns-viewer` / `ns-render` refused trained models.
+
+<div align="center">
+  <img src="./img/density_clipping.png" height="300px">
+  <p>Density Clipping from the EventNeRF paper</p>
+</div>
+
+## v0.32 (2024-11-08)
+
+First public release.
