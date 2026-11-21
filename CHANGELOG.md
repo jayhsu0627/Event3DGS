@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Custom data (`dataloader.py`, [docs/CUSTOM_DATA.md](docs/CUSTOM_DATA.md)): sensor size (`--width/--height`), intrinsics from `intrinsics.txt` or `--fx/--fy/--cx/--cy`, non-uniform pose times from `timestamps.txt`, pose world up-axis (`--world-up`), and `--normalize` to bring any capture to the scale the model's thresholds assume. Input checks for event coordinates, polarities, pose matrices and timestamp units. With explicit intrinsics, `--type` selects only the event settings. EventNeRF scenes preprocess to identical `transforms.json` files as before.
+  Tested end to end: lego rewritten as a custom recording (z-up world, scaled 2.5x and shifted, microsecond timestamps, explicit intrinsics) trains to 28.99 dB, within seed noise of the original (28.91 ± 0.16 dB).
+- `scripts/export_ply.py`: standard 3DGS `.ply` export.
+- `scripts/reproduce.sh`: trains and evaluates lego, drums and sewing and prints the results table (a fresh run gave lego 28.95 dB, drums 30.95 dB).
+- README results are now mean ± std over 4 runs: lego 28.91 ± 0.16 dB, drums 30.89 ± 0.08 dB.
+- `scripts/make_orbit_gif.py`: reads frame times and sensor size from `transforms.json`.
+
 ## v0.5 (2026-11-20): official training recipe
 
 The training recipe follows the [official Event3DGS implementation](https://github.com/tyxiong23/Event3DGS). The haze left in v0.4 came from splatfacto defaults that do not fit event data:

@@ -9,7 +9,8 @@ Train 3D Gaussian Splatting from event-camera data, as a [nerfstudio](https://do
 
 ## Updates
 
-- **2026-11-20, v0.5:** training recipe aligned with the official Event3DGS implementation; background haze removed. Lego 28.81 dB, drums 30.82 dB PSNR.
+- **Unreleased:** custom-data support ([docs/CUSTOM_DATA.md](docs/CUSTOM_DATA.md): any sensor size, `intrinsics.txt`, `timestamps.txt`, world up-axis, scale normalisation) and `.ply` export.
+- **2026-11-20, v0.5:** training recipe aligned with the official Event3DGS implementation; background haze removed. Lego 28.9 dB, drums 30.9 dB PSNR.
 - **2026-11-20, v0.4:** fixed the event-supervision bugs behind the v0.32 floaters.
 - **2024-11-08, v0.32:** first public release.
 
@@ -38,14 +39,14 @@ Renders from three training-ring poses (top) and their opacity (bottom; black is
 |---|
 | ![sewing](./img/v05_sewing.png) |
 
-PSNR / SSIM / LPIPS on the 99 EventNeRF ground-truth views (log-affine colour alignment, single seed):
+PSNR / SSIM / LPIPS on the 99 EventNeRF ground-truth views (log-affine colour alignment; ESplat: mean ± std over 4 training runs, seeds 42, 1, 2 and a repeat of 42):
 
 | Scene | ESplat v0.5 | EventNeRF renders, same metric |
 |---|---|---|
-| lego | **28.81 / 0.939 / 0.049** | 25.82 / 0.893 / 0.137 |
-| drums | **30.82 / 0.952 / 0.040** | 28.43 / 0.924 / 0.057 |
+| lego | **28.91 ± 0.16 / 0.939 ± 0.001 / 0.048 ± 0.001** | 25.82 / 0.893 / 0.137 |
+| drums | **30.89 ± 0.08 / 0.952 ± 0.000 / 0.040 ± 0.000** | 28.43 / 0.924 / 0.057 |
 
-Off-orbit (±30°) mean opacity is 0.35-0.39 on lego and 0.24-0.26 on drums. The lego baseplate stays translucent from above because every training camera is level with it. `scripts/reproduce.sh` regenerates this table.
+Off-orbit (±30°) mean opacity is 0.34-0.39 on lego and 0.23-0.26 on drums. The lego baseplate stays translucent from above because every training camera is level with it. `scripts/reproduce.sh` regenerates this table.
 
 ## ESplat and the official Event3DGS
 
@@ -96,7 +97,7 @@ data
     └── pose/
 ```
 
-Each scene needs exactly one event `.npz` (arrays `x`, `y`, `t`, `p`) and one OpenCV camera-to-world pose per frame in `pose/`, uniformly spaced in time over the event stream. `ex2_events_viz.ipynb` visualises the events. [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jayhsu0627/Event3DGS/blob/main/data/ex2_events_viz.ipynb)
+Each scene needs exactly one event `.npz` (arrays `x`, `y`, `t`, `p`) and one OpenCV camera-to-world pose per frame in `pose/`; optional `intrinsics.txt` and `timestamps.txt` describe the camera and non-uniform pose times. **To use your own recording, see [docs/CUSTOM_DATA.md](docs/CUSTOM_DATA.md).** `ex2_events_viz.ipynb` visualises the events. [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jayhsu0627/Event3DGS/blob/main/data/ex2_events_viz.ipynb)
 
 `dataloader.py` writes a nerfstudio folder `data/<scene>/output/`: `transforms.json` (intrinsics, poses, and an `events` block with the event file, contrast threshold, polarity offset, window size and an estimated scene bound) plus `images/` previews used only as viewer thumbnails. Synthetic vs. real data is auto-detected and selects the EventNeRF settings (focal 480.55 / 389.25, threshold 0.25 / 0.1, window 50 / 100).
 
@@ -106,7 +107,7 @@ python dataloader.py -p data -s drums
 python dataloader.py -p data -s sewing --polarity-offset -0.375   # EventNeRF's per-scene offset (chick: -0.438)
 ```
 
-Useful flags: `--bound {auto,eventnerf,none,"r,z_min,z_max"}`, `--event-threshold`, `--tonemap-eps`, `--max-winsize`, `--monochrome`, `-o <output dir>`.
+Useful flags: `--type {auto,synthetic,real}`, `--width/--height`, `--focal` or `--fx/--fy/--cx/--cy`, `--world-up {y-down,z-up,y-up}`, `--normalize`, `--bound {auto,eventnerf,none,"r,z_min,z_max"}`, `--event-threshold`, `--tonemap-eps`, `--max-winsize`, `--monochrome`, `-o <output dir>`.
 
 ## Train
 
@@ -145,13 +146,20 @@ COMP_DATA=/path/to/comp_data bash scripts/reproduce.sh
 
 `scripts/make_orbit_gif.py --load-config <config.yml> --out <file.gif>` makes the orbit animation at the top of this page.
 
+## Export
+
+```
+python scripts/export_ply.py --load-config outputs/lego/esplatfacto/<timestamp>/config.yml --out exports/lego.ply
+```
+
+writes a standard 3DGS `.ply` (positions, SH colours, logit opacity, log scales, quaternions) that common Gaussian-splat viewers open. Gaussians outside the scene bound are dropped, since the renderer treats them as empty. nerfstudio's own `ns-export gaussian-splat` does not accept this model yet (see below).
+
 # Known issues and TODOs
 
-- [ ] `ns-export gaussian-splat` fails with `assert isinstance(pipeline.model, SplatfactoModel)`, because the model is an `ESplatfactoModel`. Fix: accept it in `ExportGaussianSplat` in nerfstudio's `exporter.py`.
-- [ ] Real scenes use focal 389.25 with a centred principal point; EventNeRF's calibration files (with distortion) are not used yet.
-- [ ] Split the RGB channels into independent 3DGS.
-- [ ] Estimate t0 and t in preprocessing.
-- [ ] Unstable background (grey) colouring in preprocessing.
+- [ ] Port to the current nerfstudio (1.1.x) and gsplat (1.x) by subclassing `SplatfactoModel`; this also makes `ns-export gaussian-splat` accept the model (it asserts `isinstance(pipeline.model, SplatfactoModel)`).
+- [ ] Progressive training from the official implementation (a second round initialised from the high-opacity Gaussians).
+- [ ] Use EventNeRF's per-scene calibration (with distortion) for the real scenes; they currently use focal 389.25 and a centred principal point.
+- [ ] Report the official implementation's numbers on the same metric.
 
 # Acknowledgements
 

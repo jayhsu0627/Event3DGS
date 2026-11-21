@@ -4,7 +4,6 @@ python scripts/make_orbit_gif.py --load-config outputs/drums/esplatfacto/<timest
 """
 
 import argparse
-import glob
 import json
 import os
 import sys
@@ -14,7 +13,7 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from dataloader import frame_times, load_events, window_counts  # noqa: E402
+from dataloader import load_events, window_counts  # noqa: E402
 from eval_gt import all_cameras, load_pipeline, render  # noqa: E402
 
 ON_COLOR = np.array([0.76, 0.25, 0.05])
@@ -40,14 +39,15 @@ def main():
     pipeline = load_pipeline(args.load_config)
     cams = all_cameras(pipeline)
     data_dir = Path(pipeline.datamanager.config.dataparser.data)
-    meta = json.loads((data_dir / "transforms.json").read_text())["events"]
-    events = load_events(os.path.normpath(data_dir / meta["path"]))
-    times = frame_times(events[2], len(glob.glob(str(data_dir / "images" / "r_*.png"))))
+    transforms = json.loads((data_dir / "transforms.json").read_text())
+    events = load_events(os.path.normpath(data_dir / transforms["events"]["path"]))
+    times = np.array([f["time"] for f in transforms["frames"]])
+    size = (transforms["w"], transforms["h"])
 
     frames = []
     for k in range(args.window, max(cams) + 1, args.step):
         rgb, acc = render(pipeline, cams[k])
-        signed, _ = window_counts(events, times, k - args.window, k)
+        signed, _ = window_counts(events, times, k - args.window, k, size)
         tile = np.concatenate([event_panel(signed), rgb, np.repeat(acc[..., None], 3, -1)], axis=1)
         frames.append(Image.fromarray((tile * 255).astype(np.uint8)).quantize(colors=128, method=Image.MEDIANCUT))
     args.out.parent.mkdir(parents=True, exist_ok=True)
